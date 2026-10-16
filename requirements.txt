@@ -10,4 +10,4 @@ pytest
 fastapi
 uvicorn[standard]
 python-multipart
-# optional (local embeddings / reranking): pip install sentence-transformers
+sentence-transformers
