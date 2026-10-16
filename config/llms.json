@@ -1,0 +1,33 @@
+{
+  "active": "anthropic-sonnet",
+  "profiles": [
+    {
+      "id": "anthropic-sonnet",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "max_tokens": 800,
+      "price_in": 0.0,
+      "price_out": 0.0
+    },
+    {
+      "id": "openai-gpt4o-mini",
+      "provider": "openai",
+      "model": "gpt-4o-mini",
+      "api_key_env": "OPENAI_API_KEY",
+      "max_tokens": 800,
+      "price_in": 0.15,
+      "price_out": 0.60
+    },
+    {
+      "id": "openai-compatible",
+      "provider": "openai_compatible",
+      "model": "gpt-4o-mini",
+      "base_url": "https://api.example.com/v1",
+      "api_key_env": "LLM_API_KEY",
+      "max_tokens": 800,
+      "price_in": 0.0,
+      "price_out": 0.0
+    }
+  ]
+}
