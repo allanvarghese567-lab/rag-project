@@ -19,8 +19,6 @@ import statistics
 import config
 import rag
 
-_judge_client = None
-
 JUDGE_SYS = (
     "You grade answers. Given a question, a reference answer and a candidate "
     "answer, reply with ONLY JSON: "
@@ -30,22 +28,15 @@ JUDGE_SYS = (
 )
 
 
-def _anthropic():
-    """Return a shared Anthropic client for the judge (created lazily)."""
-    global _judge_client
-    if _judge_client is None:
-        from anthropic import Anthropic
-        _judge_client = Anthropic()
-    return _judge_client
-
-
 def judge(q, ref, cand):
     """Ask the LLM to grade one answer. Returns {"correct": bool, "reason": str}."""
-    msg = _anthropic().messages.create(
-        model=config.LLM_MODEL, max_tokens=200, system=JUDGE_SYS,
-        messages=[{"role": "user",
-                   "content": f"Question: {q}\nReference: {ref}\nCandidate: {cand}"}])
-    text = msg.content[0].text.replace("```json", "").replace("```", "").strip()
+    import llm
+    text, _ = llm.complete(
+        JUDGE_SYS,
+        f"Question: {q}\nReference: {ref}\nCandidate: {cand}",
+        max_tokens=200,
+    )
+    text = text.replace("```json", "").replace("```", "").strip()
     try:
         return json.loads(text)
     except Exception:
@@ -56,7 +47,7 @@ def run(label, backend="chroma", k=config.TOP_K):
     """Run every eval question, print a diagnosis, append a summary line."""
     cases = json.load(open(config.EVAL_SET_PATH))
     rows = []
-    config.SHOW_TRACES = False               # keep the eval output readable
+    config.SHOW_TRACES = False
     try:
         for c in cases:
             t = time.perf_counter()
