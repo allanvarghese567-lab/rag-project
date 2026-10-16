@@ -8,9 +8,18 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
       - key: OPENAI_API_KEY
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
-      - key: PYTHON_VERSION
-        value: "3.11"
+      # GitHub — required for POST /jobs/reindex and /console reindex button
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_OWNER
+        value: allanvarghese567-lab
+      - key: GITHUB_REPO
+        value: rag-project
+      - key: GITHUB_BRANCH
+        value: main
