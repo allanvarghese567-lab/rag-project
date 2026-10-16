@@ -1,0 +1,13 @@
+numpy
+pypdf
+openai
+anthropic
+chromadb
+rank_bm25
+requests
+python-dotenv
+pytest
+fastapi
+uvicorn[standard]
+python-multipart
+# optional (local embeddings / reranking): pip install sentence-transformers

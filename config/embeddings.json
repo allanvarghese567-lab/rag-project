@@ -1,0 +1,7 @@
+{
+  "active": "openai-small",
+  "profiles": [
+    {"id": "openai-small", "provider": "openai", "model": "text-embedding-3-small", "api_key_env": "OPENAI_API_KEY", "batch_size": 100},
+    {"id": "local-minilm", "provider": "sentence_transformers", "model": "all-MiniLM-L6-v2", "batch_size": 64}
+  ]
+}
