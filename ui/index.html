@@ -17,6 +17,7 @@ input,select,textarea{width:100%}textarea{resize:vertical;min-height:60px}
 #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#111;color:#fff;padding:8px 14px;border-radius:8px;font-size:13px;opacity:0;transition:.2s;z-index:9;max-width:90%}
 #toast.show{opacity:1}#toast.err{background:var(--bad)}
 pre{margin:0;font:13px ui-monospace,monospace}
+a{color:var(--ac)}
 </style></head><body>
 <main><nav id=nav></nav><div id=app></div></main>
 <div id=toast></div>
@@ -57,7 +58,8 @@ function apiV(){
   const activeId=(llmCfg&&llmCfg.active)||(st&&st.llm_profile&&st.llm_profile.id)||'';
   return `<div class=card>
 <b>Live RAG API</b>
-<p class=mut>Base URL: <code>${esc(S.apiBase||'(not set — open Connect)')}</code></p>
+<p class=mut>Base URL: <code>${esc(S.apiBase||'(not set — open Connect)')}</code>
+ · Server console: open <code>/console</code> on the API host for one-click buttons.</p>
 <div class=row style="margin-top:8px">
 <button class=p data-a=apistatus>Refresh status</button>
 <button data-a=apitraces>Load traces</button>
@@ -105,15 +107,26 @@ function llmsV(){
 <div class=row><button class=p data-a=loadllms>Load from API</button></div></div>`;
   return `<div class=card>
 <b>LLM profiles</b>
-<p class=mut>Active: <code>${esc(llmCfg.active)}</code> · <code>config/llms.json</code></p>
-<p class=mut>Providers: anthropic · openai · openai_compatible (set base_url for gateways)</p>
-${(llmCfg.profiles||[]).map(p=>`<div class=card style="margin:6px 0">
-<div class=row><b>${esc(p.id)}</b>${p.id===llmCfg.active?' <span class=ok>● active</span>':''}</div>
-<div class=mut>${esc(p.provider)} / ${esc(p.model)}${p.base_url?' · '+esc(p.base_url):''}</div>
-<div class=mut>key env: <code>${esc(p.api_key_env||'')}</code></div>
-</div>`).join('')}
-<p class=mut>Change active: edit config/llms.json or set env LLM_PROFILE on the server.</p>
-<div class=row><button data-a=loadllms>Refresh</button></div>
+<p class=mut>Active: <code>${esc(llmCfg.active)}</code></p>
+${(llmCfg.profiles||[]).map(p=>`<div class=card style="margin:6px 0"><b>${esc(p.id)}</b> <span class=mut>${esc(p.provider)} / ${esc(p.model)}</span></div>`).join('')}
+<div class=row><button data-a=loadllms>Refresh</button></div></div>`;
+}
+
+function jobs(){
+  const j=window._job||null;
+  return `<div class=card>
+<b>Jobs — temporary reindex runner</b>
+<p class=mut>Calls <code>POST /jobs/reindex</code> on your API (server needs <code>GITHUB_TOKEN</code>). Or dispatch with a GitHub PAT.</p>
+<label class=row style="margin:8px 0;display:flex;gap:6px;align-items:center"><input type=checkbox id=jobevals> Also run evals after index</label>
+<div class=row>
+<button class=p data-a=apireindex ${S.apiBase?'':'disabled'}>Start reindex via API</button>
+<button data-a=run ${S.token?'':'disabled'}>Dispatch via GitHub token</button>
+</div>
+${j?`<div style="margin-top:12px" class=mut>
+Status: <b>${esc(j.status||'?')}</b>${j.conclusion?' / '+esc(j.conclusion):''}
+${j.run_id?` · run #${j.run_number||j.run_id}`:''}<br>
+${j.html_url?`<a href="${esc(j.html_url)}" target=_blank rel=noopener>Open Actions run</a>`:''}
+</div>`:''}
 </div>`;
 }
 
@@ -127,7 +140,6 @@ conn=()=>`<div class=card><b>Live RAG API</b>
 <div class=row style="margin-top:10px"><button class=p data-a=connect>Connect</button></div></div>`;
 
 emb=()=>`<div class=card><b>Embeddings</b><p class=mut>${cfg?`Active: <code>${esc(cfg.active)}</code>`:'Connect GitHub or use /embeddings'}</p></div>`;
-jobs=()=>`<div class=card><b>Jobs</b><div class=row><button class=p data-a=run ${S.token?'':'disabled'}>Run reindex</button></div></div>`;
 
 function render(){
   $('#nav').innerHTML=TABS.map(([k,v])=>`<button data-t=${k} class="${k===tab?'on':''}">${v}</button>`).join('');
@@ -163,8 +175,19 @@ document.addEventListener('click',async e=>{
       try{window._apiStatus=await api('/status')}catch(_){}
       render(); return;
     }
+    if(a==='apireindex'){
+      const run_evals=!!($('#jobevals')&&$('#jobevals').checked);
+      say('Dispatching reindex…');
+      window._job=await api('/jobs/reindex',{method:'POST',body:JSON.stringify({run_evals})});
+      say(window._job.html_url?'Job started':'Dispatched');
+      render(); return;
+    }
     if(a==='connect'){save();await gh('');tab='emb';say('Connected')}
-    if(a==='run'){await gh('/actions/workflows/reindex.yml/dispatches',{method:'POST',body:JSON.stringify({ref:S.branch||'main',inputs:{run_evals:'false'}})});say('Reindex requested')}
+    if(a==='run'){
+      const run_evals=String(!!($('#jobevals')&&$('#jobevals').checked));
+      await gh('/actions/workflows/reindex.yml/dispatches',{method:'POST',body:JSON.stringify({ref:S.branch||'main',inputs:{run_evals}})});
+      say('Reindex requested');
+    }
   }catch(err){say(err.message||String(err),1)}
   render();
 });
