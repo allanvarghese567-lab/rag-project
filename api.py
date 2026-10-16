@@ -6,12 +6,6 @@ as a free-hostable HTTP service. Open /docs for interactive Swagger.
 
 Run locally:
     uvicorn api:app --reload --host 0.0.0.0 --port 8000
-
-Free deploy targets (pick one):
-  - Render.com free web service (spins down after idle)
-  - Fly.io free allowance
-  - Hugging Face Spaces (Docker or Gradio-style FastAPI)
-  - Railway hobby / free trial
 """
 from __future__ import annotations
 
@@ -35,14 +29,14 @@ app = FastAPI(
     description=(
         "Modular Retrieval-Augmented Generation backend. "
         "JSON + NumPy source of truth, Chroma index, hybrid/BM25/rerank, "
-        "per-stage tracing. Use as a custom connector in automation tools via OpenAPI."
+        "pluggable embeddings + LLM gateways, per-stage tracing. "
+        "Use as a custom connector in automation tools via OpenAPI."
     ),
-    version="1.0.0",
+    version="1.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
 
-# Allow the static GitHub Pages UI (and local dev) to call this API.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -52,8 +46,6 @@ app.add_middleware(
 )
 
 
-# ---------- request / response models ----------
-
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, examples=["What is the refund window?"])
     backend: str = Field(
@@ -61,6 +53,10 @@ class AskRequest(BaseModel):
         description="numpy | chroma | hybrid | any of those +rerank (e.g. hybrid+rerank)",
     )
     k: int = Field(config.TOP_K, ge=1, le=50)
+    llm_profile: Optional[str] = Field(
+        None,
+        description="Optional LLM profile id from config/llms.json (default: active)",
+    )
 
 
 class AskResponse(BaseModel):
@@ -68,6 +64,7 @@ class AskResponse(BaseModel):
     hits: list[dict[str, Any]]
     backend: str
     k: int
+    llm_profile: Optional[str] = None
 
 
 class RetrieveResponse(BaseModel):
@@ -85,7 +82,7 @@ class StatusResponse(BaseModel):
     chunks: int
     sources: list[str]
     embedding_profile: dict[str, Any]
-    llm_model: str
+    llm_profile: dict[str, Any]
     store_dir: str
 
 
@@ -95,45 +92,53 @@ class EvalRequest(BaseModel):
     k: int = Field(config.TOP_K, ge=1, le=50)
 
 
-# ---------- endpoints ----------
-
 @app.get("/health", tags=["meta"])
 def health():
-    """Liveness check for free hosts and load balancers."""
     return {"status": "ok"}
 
 
 @app.get("/status", response_model=StatusResponse, tags=["meta"])
 def status():
-    """Store size, sources, active embedding profile, and LLM model."""
     rows, _ = store.load_store()
     sources = sorted({r["source"] for r in rows}) if rows else []
     try:
-        profile = config.active_embedding()
+        emb = config.active_embedding()
     except Exception as e:
-        profile = {"error": str(e)}
+        emb = {"error": str(e)}
+    try:
+        llm_p = config.active_llm()
+        llm_safe = {k: v for k, v in llm_p.items() if k != "api_key"}
+    except Exception as e:
+        llm_safe = {"error": str(e)}
     return StatusResponse(
         chunks=len(rows),
         sources=sources,
-        embedding_profile=profile,
-        llm_model=config.LLM_MODEL,
+        embedding_profile=emb,
+        llm_profile=llm_safe,
         store_dir=config.STORE_DIR,
     )
 
 
 @app.post("/ask", response_model=AskResponse, tags=["rag"])
 def ask(body: AskRequest):
-    """
-    Answer a question from the indexed documents.
-    Traces are written to store/traces.jsonl automatically.
-    """
     if not body.question.strip():
         raise HTTPException(400, "question is required")
     try:
-        answer, hits = rag.ask(body.question, backend=body.backend, k=body.k)
+        answer, hits = rag.ask(
+            body.question,
+            backend=body.backend,
+            k=body.k,
+            llm_profile=body.llm_profile,
+        )
     except Exception as e:
         raise HTTPException(500, f"ask failed: {e}") from e
-    return AskResponse(answer=answer, hits=hits, backend=body.backend, k=body.k)
+    return AskResponse(
+        answer=answer,
+        hits=hits,
+        backend=body.backend,
+        k=body.k,
+        llm_profile=body.llm_profile or config.active_llm().get("id"),
+    )
 
 
 @app.get("/retrieve", response_model=RetrieveResponse, tags=["rag"])
@@ -142,7 +147,6 @@ def retrieve(
     backend: str = Query("chroma"),
     k: int = Query(config.TOP_K, ge=1, le=50),
 ):
-    """Retrieve top-k chunks without calling the LLM."""
     try:
         hits = retrieval.retrieve(q, k=k, backend=backend)
     except Exception as e:
@@ -152,27 +156,22 @@ def retrieve(
 
 @app.post("/ingest", response_model=IngestResponse, tags=["rag"])
 async def ingest_pdf(file: UploadFile = File(..., description="PDF to index")):
-    """
-    Upload a PDF, chunk + embed it with the active profile, and update the store.
-    Re-uploading the same filename replaces its previous chunks.
-    """
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "Only PDF files are accepted")
-    # Write to a temp file so pypdf can open a path
     suffix = os.path.splitext(file.filename)[1] or ".pdf"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         content = await file.read()
         tmp.write(content)
         tmp_path = tmp.name
+    dest = None
     try:
-        # Use the original basename so source metadata stays stable
         dest = os.path.join(tempfile.gettempdir(), os.path.basename(file.filename))
         os.replace(tmp_path, dest)
         n = ingest(dest)
     except Exception as e:
         raise HTTPException(500, f"ingest failed: {e}") from e
     finally:
-        for p in (tmp_path, dest if "dest" in dir() else None):
+        for p in (tmp_path, dest):
             if p and os.path.exists(p):
                 try:
                     os.unlink(p)
@@ -183,7 +182,6 @@ async def ingest_pdf(file: UploadFile = File(..., description="PDF to index")):
 
 @app.get("/traces", tags=["observability"])
 def traces(limit: int = Query(20, ge=1, le=200)):
-    """Return the most recent traces (newest first) from store/traces.jsonl."""
     path = config.TRACE_PATH
     if not os.path.exists(path):
         return {"traces": []}
@@ -199,13 +197,8 @@ def traces(limit: int = Query(20, ge=1, le=200)):
 
 @app.post("/evals", tags=["evals"])
 def run_evals(body: EvalRequest):
-    """
-    Run the offline eval set (eval_set.json) and append a summary line.
-    Requires ANTHROPIC_API_KEY (judge + answers). Can be slow.
-    """
     import evals
     try:
-        # evals.run prints and appends; we return a short confirmation
         evals.run(body.label, backend=body.backend, k=body.k)
     except Exception as e:
         raise HTTPException(500, f"evals failed: {e}") from e
@@ -214,14 +207,21 @@ def run_evals(body: EvalRequest):
 
 @app.get("/embeddings", tags=["config"])
 def embeddings_config():
-    """Current embedding profiles and active id (from config/embeddings.json)."""
     path = config.EMBED_CONFIG_PATH
     if not os.path.exists(path):
         raise HTTPException(404, "embeddings.json not found")
     return json.load(open(path))
 
 
-# Optional: root redirect to docs for convenience
+@app.get("/llms", tags=["config"])
+def llms_config():
+    """Current LLM profiles and active id (from config/llms.json)."""
+    path = config.LLM_CONFIG_PATH
+    if not os.path.exists(path):
+        raise HTTPException(404, "llms.json not found")
+    return json.load(open(path))
+
+
 @app.get("/", include_in_schema=False)
 def root():
     return {
