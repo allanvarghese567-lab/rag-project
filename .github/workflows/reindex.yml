@@ -1,0 +1,46 @@
+name: reindex
+on:
+  schedule:
+    - cron: '0 */6 * * *'        # editable from the UI (UTC)
+  workflow_dispatch:
+    inputs:
+      run_evals:
+        description: Run evals after indexing
+        type: boolean
+        default: false
+  push:
+    paths: ['config/embeddings.json', 'docs/**']
+  repository_dispatch:
+    types: [reindex]             # external trigger / webhook-style entry point
+concurrency:
+  group: reindex
+  cancel-in-progress: false
+jobs:
+  reindex:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11', cache: pip }
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: store
+          key: store-${{ hashFiles('docs/**', 'config/embeddings.json', 'config.py', 'helpers.py') }}
+      - name: Install
+        run: |
+          pip install -r requirements.txt
+          P=$(jq -r '. as $c | .profiles[] | select(.id==$c.active) | .provider' config/embeddings.json)
+          [ "$P" = "sentence_transformers" ] && pip install sentence-transformers || true
+      - name: Index
+        if: steps.cache.outputs.cache-hit != 'true' || inputs.run_evals == true
+        run: python jobs/run_job.py
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EMBED_API_KEY: ${{ secrets.EMBED_API_KEY }}
+          RUN_EVALS: ${{ inputs.run_evals }}
+      - name: Nothing changed
+        if: steps.cache.outputs.cache-hit == 'true' && inputs.run_evals != true
+        run: echo "Index cache is current - nothing to do." >> "$GITHUB_STEP_SUMMARY"
