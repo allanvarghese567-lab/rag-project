@@ -1,6 +1,16 @@
 {
-  "active": "anthropic-sonnet",
+  "active": "xai-grok",
   "profiles": [
+    {
+      "id": "xai-grok",
+      "provider": "openai_compatible",
+      "model": "grok-4.7",
+      "base_url": "https://api.x.ai/v1",
+      "api_key_env": "XAI_API_KEY",
+      "max_tokens": 800,
+      "price_in": 2.0,
+      "price_out": 6.0
+    },
     {
       "id": "anthropic-sonnet",
       "provider": "anthropic",
