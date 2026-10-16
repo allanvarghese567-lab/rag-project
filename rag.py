@@ -10,43 +10,37 @@ import sys
 
 import config
 import retrieval
+import llm
 from ingest import ingest
 from compare import compare
 from tracing import trace, span
 
 SYSTEM = "Answer ONLY from the context. If it's not there, say you don't know."
-_claude = None  # Anthropic client, created on first use
 
 
-def _anthropic():
-    """Return a shared Anthropic client (created lazily)."""
-    global _claude
-    if _claude is None:
-        from anthropic import Anthropic
-        _claude = Anthropic()
-    return _claude
-
-
-def ask(question, backend="chroma", k=config.TOP_K):
+def ask(question, backend="chroma", k=config.TOP_K, llm_profile=None):
     """
     Answer a question from the stored documents.
     Returns (answer_text, hits). The whole run is traced: retrieval spans,
     plus an "llm" span with token counts and cost.
+    llm_profile: optional profile dict or id string; default = active_llm().
     """
+    if isinstance(llm_profile, str):
+        cfg = __import__("json").load(open(config.LLM_CONFIG_PATH))
+        llm_profile = next(p for p in cfg["profiles"] if p["id"] == llm_profile)
+
     with trace("ask", question=question[:80], backend=backend):
         hits = retrieval.retrieve(question, k, backend)
         ctx = "\n\n---\n\n".join(h["content"] for h in hits)
-        with span("llm", model=config.LLM_MODEL) as s:
-            msg = _anthropic().messages.create(
-                model=config.LLM_MODEL, max_tokens=800, system=SYSTEM,
-                messages=[{"role": "user",
-                           "content": f"Context:\n{ctx}\n\nQuestion: {question}"}])
-            u = msg.usage
-            s["data"].update(
-                tokens_in=u.input_tokens, tokens_out=u.output_tokens,
-                cost_usd=round((u.input_tokens * config.PRICE_IN +
-                                u.output_tokens * config.PRICE_OUT) / 1e6, 5))
-    return msg.content[0].text, hits
+        prof = llm_profile or config.active_llm()
+        with span("llm", model=prof["model"], profile=prof["id"]) as s:
+            text, usage = llm.complete(
+                SYSTEM,
+                f"Context:\n{ctx}\n\nQuestion: {question}",
+                profile=prof,
+            )
+            s["data"].update(usage)
+    return text, hits
 
 
 if __name__ == "__main__":
