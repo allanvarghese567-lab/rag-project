@@ -1,7 +1,26 @@
 {
   "active": "openai-small",
   "profiles": [
-    {"id": "openai-small", "provider": "openai", "model": "text-embedding-3-small", "api_key_env": "OPENAI_API_KEY", "batch_size": 100},
-    {"id": "local-minilm", "provider": "sentence_transformers", "model": "all-MiniLM-L6-v2", "batch_size": 64}
+    {
+      "id": "openai-small",
+      "provider": "openai_compatible",
+      "model": "text-embedding-3-small",
+      "base_url": "https://api.x.ai/v1",
+      "api_key_env": "XAI_API_KEY",
+      "batch_size": 100
+    },
+    {
+      "id": "openai-official",
+      "provider": "openai",
+      "model": "text-embedding-3-small",
+      "api_key_env": "OPENAI_API_KEY",
+      "batch_size": 100
+    },
+    {
+      "id": "local-minilm",
+      "provider": "sentence_transformers",
+      "model": "all-MiniLM-L6-v2",
+      "batch_size": 64
+    }
   ]
 }
