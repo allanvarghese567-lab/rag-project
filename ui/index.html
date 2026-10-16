@@ -2,26 +2,23 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>RAG Control</title>
 <style>
-:root{--bg:#fff;--fg:#1a1a1a;--mut:#666;--card:#f5f5f4;--bd:#ddd;--ac:#2563eb;--ok:#16a34a;--bad:#dc2626;--warn:#d97706}
-@media(prefers-color-scheme:dark){:root{--bg:#161616;--fg:#eee;--mut:#999;--card:#222;--bd:#383838;--ac:#6ea0ff;--ok:#4ade80;--bad:#f87171;--warn:#fbbf24}}
+:root{--bg:#fff;--fg:#1a1a1a;--mut:#666;--card:#f5f5f4;--bd:#ddd;--ac:#2563eb;--ok:#16a34a;--bad:#dc2626}
+@media(prefers-color-scheme:dark){:root{--bg:#161616;--fg:#eee;--mut:#999;--card:#222;--bd:#383838;--ac:#6ea0ff;--ok:#4ade80;--bad:#f87171}}
 *{box-sizing:border-box}body{margin:0;font:15px system-ui,sans-serif;background:var(--bg);color:var(--fg)}
 main{max-width:720px;margin:auto;padding:12px}
 nav{display:flex;gap:6px;position:sticky;top:0;background:var(--bg);padding:8px 0;overflow-x:auto;z-index:2}
 button,input,select,textarea{font:inherit;color:inherit;background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:8px 12px}
 button{cursor:pointer}button.p{background:var(--ac);color:#fff;border-color:var(--ac)}button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
-button:disabled{opacity:.5}.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;margin:12px 0}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;margin:12px 0}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.grow{flex:1}
-.mut{color:var(--mut);font-size:13px}.ok{color:var(--ok)}.bad{color:var(--bad)}
+.mut{color:var(--mut);font-size:13px}.ok{color:var(--ok)}
 label{display:block;margin:10px 0 4px;font-size:13px;color:var(--mut)}
 input,select,textarea{width:100%}textarea{resize:vertical;min-height:60px}
 #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#111;color:#fff;padding:8px 14px;border-radius:8px;font-size:13px;opacity:0;transition:.2s;z-index:9;max-width:90%}
 #toast.show{opacity:1}#toast.err{background:var(--bad)}
 pre{margin:0;font:13px ui-monospace,monospace}
 </style></head><body>
-<main>
-<nav id=nav></nav>
-<div id=app></div>
-</main>
+<main><nav id=nav></nav><div id=app></div></main>
 <div id=toast></div>
 <script>
 const $=s=>document.querySelector(s);
@@ -29,13 +26,10 @@ const esc=t=>String(t??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const S=JSON.parse(sessionStorage.getItem('rc')||'{}');S.branch=S.branch||'main';
 const save=()=>sessionStorage.setItem('rc',JSON.stringify(S));
 const say=(m,err)=>{const t=$('#toast');t.textContent=m;t.className=err?'show err':'show';clearTimeout(say._t);say._t=setTimeout(()=>t.className='',3200)};
+const TABS=[['api','Live API'],['llms','LLMs'],['emb','Embeddings'],['jobs','Jobs'],['conn','Connect']];
+let tab=S.apiBase?'api':'conn';
+let cfg=null, llmCfg=null;
 
-const TABS=[['api','Live API'],['emb','Embeddings'],['jobs','Jobs'],['sched','Schedule'],['hooks','Webhooks'],['conn','Connect']];
-let tab=S.apiBase?'api':(S.token?'emb':'conn');
-let cfg=null,cfgSha='',wf='',wfSha='',dirty=0,edit=null,runs=[],open=null,steps={},evals=0;
-let hl=[],hf={url:'',secret:'',ev:{workflow_run:1,workflow_job:0,push:0}},feed=[],ws=null,wsOk=0,wst=null,retry=0;
-
-/* ---- Live FastAPI ---- */
 async function api(path, opts={}){
   const base=(S.apiBase||'').replace(/\/$/,'');
   if(!base) throw new Error('Set API base URL under Connect');
@@ -50,13 +44,20 @@ async function api(path, opts={}){
   }
   return j;
 }
+async function gh(p,o={}){
+  const r=await fetch(`https://api.github.com/repos/${S.owner}/${S.repo}${p}`,{...o,cache:'no-cache',headers:{Accept:'application/vnd.github+json',Authorization:`Bearer ${S.token}`,'X-GitHub-Api-Version':'2022-11-28',...(o.body?{'Content-Type':'application/json'}:{})}});
+  const t=await r.text(); let j; try{j=JSON.parse(t)}catch{j={message:t}}
+  if(!r.ok) throw new Error(j.message||t||r.status);
+  return j;
+}
+
 function apiV(){
-  const st=window._apiStatus||null;
-  const ans=window._apiAnswer||null;
-  const tr=window._apiTraces||null;
+  const st=window._apiStatus||null, ans=window._apiAnswer||null, tr=window._apiTraces||null;
+  const profiles=(llmCfg&&llmCfg.profiles)||(st&&st.llm_profile?[st.llm_profile]:[]);
+  const activeId=(llmCfg&&llmCfg.active)||(st&&st.llm_profile&&st.llm_profile.id)||'';
   return `<div class=card>
 <b>Live RAG API</b>
-<p class=mut>Talks to your hosted FastAPI. Base URL: <code>${esc(S.apiBase||'(not set — open Connect)')}</code></p>
+<p class=mut>Base URL: <code>${esc(S.apiBase||'(not set — open Connect)')}</code></p>
 <div class=row style="margin-top:8px">
 <button class=p data-a=apistatus>Refresh status</button>
 <button data-a=apitraces>Load traces</button>
@@ -64,7 +65,8 @@ function apiV(){
 </div>
 ${st?`<div style="margin-top:10px" class=mut>
 Chunks: <b>${st.chunks}</b> · Sources: ${(st.sources||[]).map(s=>esc(s)).join(', ')||'none'}<br>
-Embedding: <code>${esc(st.embedding_profile?.id||st.embedding_profile?.error||'?')}</code> · LLM: <code>${esc(st.llm_model||'?')}</code>
+Embedding: <code>${esc(st.embedding_profile?.id||'?')}</code><br>
+LLM: <code>${esc(st.llm_profile?.id||'?')}</code> · ${esc(st.llm_profile?.provider||'')} / ${esc(st.llm_profile?.model||'')}
 </div>`:''}
 </div>
 <div class=card>
@@ -74,139 +76,98 @@ Embedding: <code>${esc(st.embedding_profile?.id||st.embedding_profile?.error||'?
 <div class=row>
 <div class=grow><label>Backend</label>
 <select id=apibackend>
-<option value=chroma ${!window._apiBackend||window._apiBackend==='chroma'?'selected':''}>chroma</option>
-<option value=numpy ${window._apiBackend==='numpy'?'selected':''}>numpy</option>
-<option value=hybrid ${window._apiBackend==='hybrid'?'selected':''}>hybrid</option>
-<option value="chroma+rerank" ${window._apiBackend==='chroma+rerank'?'selected':''}>chroma+rerank</option>
-<option value="hybrid+rerank" ${window._apiBackend==='hybrid+rerank'?'selected':''}>hybrid+rerank</option>
+<option value=chroma>chroma</option><option value=numpy>numpy</option><option value=hybrid>hybrid</option>
+<option value="chroma+rerank">chroma+rerank</option><option value="hybrid+rerank">hybrid+rerank</option>
 </select></div>
 <div><label>k</label><input id=apik type=number value="${window._apiK||5}" min=1 max=50 style="width:72px"></div>
 </div>
+<label>LLM profile</label>
+<select id=apillm>
+<option value="">(active: ${esc(activeId||'default')})</option>
+${profiles.map(p=>`<option value="${esc(p.id)}" ${window._apiLlm===p.id?'selected':''}>${esc(p.id)} — ${esc(p.provider)} / ${esc(p.model)}</option>`).join('')}
+</select>
 <div class=row style="margin-top:10px"><button class=p data-a=apiask>Ask</button></div>
 ${ans?`<div style="margin-top:12px"><b>Answer</b><pre style="white-space:pre-wrap;background:var(--bg);padding:10px;border-radius:8px;border:1px solid var(--bd);margin:6px 0">${esc(ans.answer)}</pre>
-<details open style="margin-top:8px"><summary class=mut>Hits (${(ans.hits||[]).length}) · backend ${esc(ans.backend)} · k ${ans.k}</summary>
-${(ans.hits||[]).map(h=>`<div class=card style="margin:6px 0"><div class=mut>${esc(h.source)} · score ${h.score!=null?Number(h.score).toFixed(3):'?'}</div><div style="font-size:13px">${esc((h.content||'').slice(0,500))}${(h.content||'').length>500?'…':''}</div></div>`).join('')}
+<details open><summary class=mut>Hits (${(ans.hits||[]).length}) · LLM ${esc(ans.llm_profile||'?')}</summary>
+${(ans.hits||[]).map(h=>`<div class=card style="margin:6px 0"><div class=mut>${esc(h.source)} · ${h.score!=null?Number(h.score).toFixed(3):'?'}</div><div style="font-size:13px">${esc((h.content||'').slice(0,500))}</div></div>`).join('')}
 </details></div>`:''}
 </div>
 <div class=card>
 <b>Ingest PDF</b>
-<label>PDF file</label>
-<input id=apifile type=file accept=".pdf,application/pdf">
+<label>PDF file</label><input id=apifile type=file accept=".pdf,application/pdf">
 <div class=row style="margin-top:10px"><button class=p data-a=apiingest>Upload &amp; index</button></div>
-<p class=mut>Re-uploading the same filename replaces its previous chunks on the server.</p>
 </div>
-${tr?`<div class=card><b>Recent traces</b>
-${(tr.traces||[]).length?(tr.traces||[]).map(t=>`<div class=card style="margin:6px 0">
-<div class=row><b>${esc(t.name)}</b><span class="mut grow">${t.total_ms} ms · ${esc(t.id)}</span></div>
-${(t.spans||[]).map(s=>`<div class=mut style="font-family:ui-monospace,monospace;font-size:12px">${esc(s.name)} ${s.ms} ms ${Object.entries(s.data||{}).map(([k,v])=>k+'='+v).join(' ')}</div>`).join('')}
-</div>`).join(''):'<p class=mut>No traces yet.</p>'}
-</div>`:''}`;
+${tr?`<div class=card><b>Recent traces</b>${(tr.traces||[]).map(t=>`<div class=card style="margin:6px 0"><div class=row><b>${esc(t.name)}</b><span class="mut grow">${t.total_ms} ms</span></div>${(t.spans||[]).map(s=>`<div class=mut style="font-family:ui-monospace,monospace;font-size:12px">${esc(s.name)} ${s.ms} ms</div>`).join('')}</div>`).join('')||'<p class=mut>No traces</p>'}</div>`:''}`;
 }
 
-/* ---- GitHub helpers (config / jobs) ---- */
-async function gh(p,o={}){
-  const r=await fetch(`https://api.github.com/repos/${S.owner}/${S.repo}${p}`,{...o,cache:'no-cache',headers:{Accept:'application/vnd.github+json',Authorization:`Bearer ${S.token}`,'X-GitHub-Api-Version':'2022-11-28',...(o.body?{'Content-Type':'application/json'}:{})}});
-  if(r.status===304) return null;
-  const t=await r.text(); let j; try{j=JSON.parse(t)}catch{j={message:t}}
-  if(!r.ok) throw new Error(j.message||t||r.status);
-  return j;
-}
-async function loadCfg(){
-  const r=await fetch(`https://api.github.com/repos/${S.owner}/${S.repo}/contents/config/embeddings.json?ref=${S.branch}`,{headers:{Accept:'application/vnd.github+json',Authorization:`Bearer ${S.token}`,'X-GitHub-Api-Version':'2022-11-28'}});
-  const j=await r.json();
-  if(!r.ok) throw new Error(j.message||'config load failed');
-  cfg=JSON.parse(atob(j.content.replace(/\n/g,''))); cfgSha=j.sha;
+function llmsV(){
+  if(!llmCfg) return `<div class=card><p class=mut>Load from live API after setting base URL under Connect.</p>
+<div class=row><button class=p data-a=loadllms>Load from API</button></div></div>`;
+  return `<div class=card>
+<b>LLM profiles</b>
+<p class=mut>Active: <code>${esc(llmCfg.active)}</code> · <code>config/llms.json</code></p>
+<p class=mut>Providers: anthropic · openai · openai_compatible (set base_url for gateways)</p>
+${(llmCfg.profiles||[]).map(p=>`<div class=card style="margin:6px 0">
+<div class=row><b>${esc(p.id)}</b>${p.id===llmCfg.active?' <span class=ok>● active</span>':''}</div>
+<div class=mut>${esc(p.provider)} / ${esc(p.model)}${p.base_url?' · '+esc(p.base_url):''}</div>
+<div class=mut>key env: <code>${esc(p.api_key_env||'')}</code></div>
+</div>`).join('')}
+<p class=mut>Change active: edit config/llms.json or set env LLM_PROFILE on the server.</p>
+<div class=row><button data-a=loadllms>Refresh</button></div>
+</div>`;
 }
 
 conn=()=>`<div class=card><b>Live RAG API</b>
-<label>API base URL (no trailing slash)</label><input data-c=apiBase value="${esc(S.apiBase||'')}" placeholder="https://rag-api.onrender.com">
-<p class=mut>Your free FastAPI host. Used by the Live API tab for /ask, /ingest, /status, /traces.</p>
-<div class=row style="margin-top:8px"><button class=p data-a=apisave>Save API URL</button></div>
-</div>
-<div class=card><b>GitHub (config &amp; jobs)</b>
+<label>API base URL</label><input data-c=apiBase value="${esc(S.apiBase||'')}" placeholder="https://rag-api.onrender.com">
+<div class=row style="margin-top:8px"><button class=p data-a=apisave>Save API URL</button></div></div>
+<div class=card><b>GitHub</b>
 <label>Owner</label><input data-c=owner value="${esc(S.owner||'')}">
-<label>Repository</label><input data-c=repo value="${esc(S.repo||'')}">
-<label>Branch</label><input data-c=branch value="${esc(S.branch||'main')}">
-<label>Fine-grained token (sessionStorage only)</label><input data-c=token type=password value="${esc(S.token||'')}">
-<div class=row style="margin-top:10px"><button class=p data-a=connect>Connect GitHub</button></div>
-<p class=mut>Token scopes: Contents RW, Actions RW, Workflows RW, Webhooks RW, Metadata R.</p></div>`;
+<label>Repo</label><input data-c=repo value="${esc(S.repo||'')}">
+<label>Token</label><input data-c=token type=password value="${esc(S.token||'')}">
+<div class=row style="margin-top:10px"><button class=p data-a=connect>Connect</button></div></div>`;
 
-emb=()=>{
-  if(!cfg) return `<p class=mut>Connect GitHub first (Connect tab).</p>`;
-  return `<div class=card><b>Embedding profiles</b>
-<p class=mut>Active: <code>${esc(cfg.active)}</code> · edit via repo file <code>config/embeddings.json</code> or full UI from original zip.</p>
-${(cfg.profiles||[]).map(p=>`<div class=card style="margin:6px 0"><b>${esc(p.id)}</b> <span class=mut>${esc(p.provider)} / ${esc(p.model)}</span>${p.id===cfg.active?' <span class=ok>● active</span>':''}</div>`).join('')}
-</div>`;
-};
-
-jobs=()=>`<div class=card><b>Jobs</b>
-<p class=mut>Trigger reindex via Actions after connecting GitHub. Full job polling UI is in the original project zip.</p>
-<div class=row><button class=p data-a=run ${S.token?'':'disabled'}>Run reindex</button></div>
-</div>`;
-
-sched=()=>`<div class=card><b>Schedule</b><p class=mut>Cron is in <code>.github/workflows/reindex.yml</code>. Full editor in original UI.</p></div>`;
-
-hooksV=()=>`<div class=card><b>Webhooks</b><p class=mut>Configure under Connect + original UI for smee/Worker live feed.</p></div>`;
+emb=()=>`<div class=card><b>Embeddings</b><p class=mut>${cfg?`Active: <code>${esc(cfg.active)}</code>`:'Connect GitHub or use /embeddings'}</p></div>`;
+jobs=()=>`<div class=card><b>Jobs</b><div class=row><button class=p data-a=run ${S.token?'':'disabled'}>Run reindex</button></div></div>`;
 
 function render(){
   $('#nav').innerHTML=TABS.map(([k,v])=>`<button data-t=${k} class="${k===tab?'on':''}">${v}</button>`).join('');
-  const views={api:apiV,emb,jobs,sched,conn,hooks:hooksV};
-  $('#app').innerHTML=(views[tab]||conn)();
+  $('#app').innerHTML=({api:apiV,llms:llmsV,emb,jobs,conn}[tab]||conn)();
 }
 
 document.addEventListener('click',async e=>{
-  if(e.target.closest('a')) return;
   const t=e.target.closest('[data-a],[data-t]'); if(!t) return;
   const {a,t:tb}=t.dataset;
   try{
-    if(tb){tab=tb;render();return}
-    if(a==='apisave'){save();say('API URL saved');tab='api';render();return}
-    if(a==='apihealth'){const j=await api('/health');say('Health: '+(j.status||JSON.stringify(j)));return}
-    if(a==='apistatus'){window._apiStatus=await api('/status');say('Status loaded');render();return}
+    if(tb){tab=tb; if(tb==='llms'&&!llmCfg&&S.apiBase){try{llmCfg=await api('/llms')}catch(_){}} render(); return}
+    if(a==='apisave'){save();say('Saved');tab='api';render();return}
+    if(a==='apihealth'){say('Health: '+(await api('/health')).status);return}
+    if(a==='apistatus'){window._apiStatus=await api('/status');try{llmCfg=await api('/llms')}catch(_){}say('Status loaded');render();return}
     if(a==='apitraces'){window._apiTraces=await api('/traces?limit=15');say('Traces loaded');render();return}
+    if(a==='loadllms'){llmCfg=await api('/llms');say('LLM profiles loaded');render();return}
     if(a==='apiask'){
-      window._apiQ=($('#apiq')||{}).value||'';
-      window._apiBackend=($('#apibackend')||{}).value||'chroma';
-      window._apiK=parseInt(($('#apik')||{}).value||'5',10)||5;
+      window._apiQ=$('#apiq').value||''; window._apiBackend=$('#apibackend').value; window._apiK=+($('#apik').value||5);
+      window._apiLlm=$('#apillm').value||'';
       if(!window._apiQ.trim()) throw new Error('Enter a question');
       say('Asking…');
-      window._apiAnswer=await api('/ask',{method:'POST',body:JSON.stringify({question:window._apiQ,backend:window._apiBackend,k:window._apiK})});
+      const body={question:window._apiQ,backend:window._apiBackend,k:window._apiK};
+      if(window._apiLlm) body.llm_profile=window._apiLlm;
+      window._apiAnswer=await api('/ask',{method:'POST',body:JSON.stringify(body)});
       say('Done'); render(); return;
     }
     if(a==='apiingest'){
-      const f=($('#apifile')||{}).files && $('#apifile').files[0];
-      if(!f) throw new Error('Choose a PDF');
-      say('Uploading '+f.name+'…');
+      const f=$('#apifile').files&&$('#apifile').files[0]; if(!f) throw new Error('Choose a PDF');
+      say('Uploading…');
       const fd=new FormData(); fd.append('file',f,f.name);
       const j=await api('/ingest',{method:'POST',body:fd});
       say('Ingested '+j.file+': '+j.chunks+' chunks');
       try{window._apiStatus=await api('/status')}catch(_){}
       render(); return;
     }
-    if(a==='connect'){
-      save();
-      await gh('');
-      cfg=null;
-      await loadCfg();
-      tab='emb'; say('Connected');
-    }
-    if(a==='run'){
-      await gh('/actions/workflows/reindex.yml/dispatches',{method:'POST',body:JSON.stringify({ref:S.branch||'main',inputs:{run_evals:'false'}})});
-      say('Reindex requested');
-    }
+    if(a==='connect'){save();await gh('');tab='emb';say('Connected')}
+    if(a==='run'){await gh('/actions/workflows/reindex.yml/dispatches',{method:'POST',body:JSON.stringify({ref:S.branch||'main',inputs:{run_evals:'false'}})});say('Reindex requested')}
   }catch(err){say(err.message||String(err),1)}
   render();
 });
-
-document.addEventListener('input',e=>{
-  const d=e.target.dataset;
-  if(d.c){S[d.c]=e.target.value.trim();}
-});
-
-(async()=>{
-  if(S.token && S.owner && S.repo){
-    try{await loadCfg()}catch(e){say(e.message,1)}
-  }
-  render();
-})();
+document.addEventListener('input',e=>{if(e.target.dataset.c)S[e.target.dataset.c]=e.target.value.trim()});
+render();
 </script></body></html>
