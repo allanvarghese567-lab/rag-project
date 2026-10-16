@@ -7,35 +7,26 @@ Modular Retrieval-Augmented Generation system in Python.
 - **Observability:** traces, per-stage timing, token cost, retrieval quality
 - **Evals:** LLM-judged accuracy plus retrieval hit rate
 - **Live API:** FastAPI + Swagger (`api.py`) for free hosting and automation connectors
-- **UI + Actions:** GitHub Pages UI manages embedding profiles and cron/reindex jobs; optional Cloudflare Worker for live webhooks
+- **UI:** GitHub Pages control panel — **Live API** tab calls `/ask`, `/ingest`, `/status`, `/traces`
 
-## Quick start
+## Quick start (local)
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # add OPENAI_API_KEY and ANTHROPIC_API_KEY
-```
-
-CLI:
-
-```bash
-python rag.py my.pdf "What is the refund window?"
-python rag.py my.pdf "..." hybrid+rerank
-```
-
-Live API (Swagger at `/docs`):
-
-```bash
+cp .env.example .env   # OPENAI_API_KEY + ANTHROPIC_API_KEY
 uvicorn api:app --reload --host 0.0.0.0 --port 8000
+# Swagger: http://localhost:8000/docs
 ```
 
-## API endpoints
+CLI still works: `python rag.py my.pdf "Your question"`
+
+## Live API endpoints
 
 | Method | Path | Purpose |
 |--------|------|--------|
 | GET | `/health` | Liveness |
-| GET | `/status` | Chunks, sources, active embedding, LLM |
+| GET | `/status` | Chunks, sources, embedding, LLM |
 | POST | `/ask` | Answer a question |
 | GET | `/retrieve` | Top-k chunks only |
 | POST | `/ingest` | Upload a PDF |
@@ -43,37 +34,32 @@ uvicorn api:app --reload --host 0.0.0.0 --port 8000
 | POST | `/evals` | Run offline eval set |
 | GET | `/embeddings` | Embedding profiles |
 
-OpenAPI at `/openapi.json` can be imported as a custom connector in Zapier, Make, n8n, etc.
+OpenAPI: `/openapi.json` — import as a custom connector in Zapier / Make / n8n.
 
-## Free live hosting
+## UI → Live API
 
-Use `render.yaml` for one-click deploy on Render free tier, or any Python host:
+1. Deploy the API (Render free tier works with `render.yaml`).
+2. Open the GitHub Pages UI (enable Pages → source GitHub Actions, or open `ui/index.html` locally).
+3. **Connect** tab → set **API base URL** (e.g. `https://your-service.onrender.com`) → Save.
+4. **Live API** tab:
+   - **Refresh status** — chunk count / active embedding
+   - **Ask** — question + backend (`chroma`, `hybrid`, `+rerank`, …)
+   - **Upload & index** — PDF ingest
+   - **Load traces** — recent timed runs
 
+Settings are stored in `sessionStorage` (API URL + optional GitHub token).
+
+## Free hosting
+
+- **Render:** use `render.yaml` (free web service; cold starts after idle).
 - Build: `pip install -r requirements.txt`
 - Start: `uvicorn api:app --host 0.0.0.0 --port $PORT`
 - Secrets: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
 
-## Project layout
+## GitHub Actions / embeddings UI
 
-```
-config.py, helpers.py, store.py, ingest.py, embeddings.py
-kwsearch.py, rerank.py, retrieval.py, tracing.py, rag.py
-api.py          # FastAPI + Swagger
-evals.py, report.py, compare.py
-jobs/run_job.py
-ui/             # GitHub Pages config & jobs UI
-.github/workflows/
-worker/         # optional Cloudflare webhook receiver
-```
-
-## GitHub UI & Actions
-
-1. Enable GitHub Pages (source: GitHub Actions).
-2. Add repo secrets: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`.
-3. Open the Pages URL → configure owner/repo/token to manage embedding profiles, trigger reindex, edit cron, and watch jobs.
-
-Optional real-time webhooks: deploy the Worker (`CLOUDFLARE_*`, `WEBHOOK_SECRET`, `VIEW_KEY` secrets) or use [smee.io](https://smee.io).
+Connect a fine-grained PAT (Contents, Actions, Workflows, Webhooks) under **Connect** to manage `config/embeddings.json` and trigger the `reindex` workflow. Optional Cloudflare Worker under `worker/` for live webhook push.
 
 ## AI gateways
 
-Embeddings support OpenAI-compatible base URLs via `config/embeddings.json` (`provider: openai_compatible`). Answer LLM is Anthropic by default (`LLM_MODEL` in `config.py`); swap the client in `rag.py` / `evals.py` for any OpenAI-compatible gateway when needed.
+Embeddings already support OpenAI-compatible base URLs via `config/embeddings.json` (`provider: openai_compatible`). The answer LLM defaults to Anthropic (`LLM_MODEL` in `config.py`); swap the client in `rag.py` / `evals.py` for any OpenAI-compatible gateway when needed.
