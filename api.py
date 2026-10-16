@@ -4,6 +4,9 @@ api.py - FastAPI backend with Swagger UI.
 Exposes the RAG pipeline (ask, retrieve, ingest, evals, traces, status)
 as a free-hostable HTTP service. Open /docs for interactive Swagger.
 
+Also: POST /jobs/reindex triggers the GitHub Actions reindex workflow
+(temporary runner) and returns the Actions run URL.
+
 Run locally:
     uvicorn api:app --reload --host 0.0.0.0 --port 8000
 """
@@ -12,8 +15,10 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from typing import Any, Optional
 
+import requests
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -30,9 +35,10 @@ app = FastAPI(
         "Modular Retrieval-Augmented Generation backend. "
         "JSON + NumPy source of truth, Chroma index, hybrid/BM25/rerank, "
         "pluggable embeddings + LLM gateways, per-stage tracing. "
+        "POST /jobs/reindex starts a temporary GitHub Actions runner. "
         "Use as a custom connector in automation tools via OpenAPI."
     ),
-    version="1.1.0",
+    version="1.2.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -45,6 +51,135 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---------- GitHub Actions helpers (temporary reindex workers) ----------
+
+GH_API = "https://api.github.com"
+WORKFLOW_FILE = "reindex.yml"
+
+
+def _gh_env():
+    """Owner/repo/token/branch for dispatching Actions."""
+    token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or ""
+    owner = os.getenv("GITHUB_OWNER", "allanvarghese567-lab")
+    repo = os.getenv("GITHUB_REPO", "rag-project")
+    branch = os.getenv("GITHUB_BRANCH", "main")
+    return token, owner, repo, branch
+
+
+def _gh_headers(token: str) -> dict:
+    return {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+def _dispatch_reindex(run_evals: bool) -> dict[str, Any]:
+    """
+    Trigger workflow_dispatch on reindex.yml, then resolve the new run URL.
+    Returns dict with run_id, html_url, status, etc.
+    """
+    token, owner, repo, branch = _gh_env()
+    if not token:
+        raise HTTPException(
+            503,
+            "GITHUB_TOKEN (or GH_TOKEN) is not set on the server. "
+            "Add a fine-grained PAT with Actions: write and Contents: read.",
+        )
+
+    headers = _gh_headers(token)
+    dispatch_url = (
+        f"{GH_API}/repos/{owner}/{repo}/actions/workflows/{WORKFLOW_FILE}/dispatches"
+    )
+    body = {
+        "ref": branch,
+        "inputs": {"run_evals": str(bool(run_evals)).lower()},
+    }
+    r = requests.post(dispatch_url, headers=headers, json=body, timeout=30)
+    if r.status_code not in (204, 200):
+        detail = r.text
+        try:
+            detail = r.json().get("message", detail)
+        except Exception:
+            pass
+        raise HTTPException(r.status_code if r.status_code >= 400 else 502,
+                            f"workflow_dispatch failed: {detail}")
+
+    # workflow_dispatch returns 204 with no run id — poll recent runs
+    runs_url = (
+        f"{GH_API}/repos/{owner}/{repo}/actions/workflows/{WORKFLOW_FILE}/runs"
+        f"?per_page=5&event=workflow_dispatch"
+    )
+    run = None
+    for _ in range(8):
+        time.sleep(1.2)
+        rr = requests.get(runs_url, headers=headers, timeout=30)
+        if not rr.ok:
+            continue
+        runs = rr.json().get("workflow_runs") or []
+        if not runs:
+            continue
+        # Prefer a run that just started (queued / in_progress)
+        for candidate in runs:
+            if candidate.get("status") in ("queued", "waiting", "in_progress", "requested"):
+                run = candidate
+                break
+        if run is None:
+            run = runs[0]
+        if run:
+            break
+
+    actions_page = f"https://github.com/{owner}/{repo}/actions/workflows/{WORKFLOW_FILE}"
+    if not run:
+        return {
+            "ok": True,
+            "dispatched": True,
+            "run_id": None,
+            "status": "unknown",
+            "html_url": actions_page,
+            "message": "Dispatch accepted; open the workflow page for the latest run.",
+            "run_evals": run_evals,
+        }
+
+    return {
+        "ok": True,
+        "dispatched": True,
+        "run_id": run.get("id"),
+        "run_number": run.get("run_number"),
+        "status": run.get("status"),
+        "conclusion": run.get("conclusion"),
+        "html_url": run.get("html_url") or actions_page,
+        "jobs_url": run.get("jobs_url"),
+        "created_at": run.get("created_at"),
+        "run_evals": run_evals,
+    }
+
+
+def _get_run(run_id: int) -> dict[str, Any]:
+    token, owner, repo, _ = _gh_env()
+    if not token:
+        raise HTTPException(503, "GITHUB_TOKEN is not set on the server.")
+    url = f"{GH_API}/repos/{owner}/{repo}/actions/runs/{run_id}"
+    r = requests.get(url, headers=_gh_headers(token), timeout=30)
+    if r.status_code == 404:
+        raise HTTPException(404, f"run {run_id} not found")
+    if not r.ok:
+        raise HTTPException(r.status_code, r.text)
+    run = r.json()
+    return {
+        "run_id": run.get("id"),
+        "run_number": run.get("run_number"),
+        "status": run.get("status"),
+        "conclusion": run.get("conclusion"),
+        "html_url": run.get("html_url"),
+        "jobs_url": run.get("jobs_url"),
+        "created_at": run.get("created_at"),
+        "updated_at": run.get("updated_at"),
+        "display_title": run.get("display_title") or run.get("name"),
+    }
+
+
+# ---------- request / response models ----------
 
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, examples=["What is the refund window?"])
@@ -91,6 +226,29 @@ class EvalRequest(BaseModel):
     backend: str = "chroma"
     k: int = Field(config.TOP_K, ge=1, le=50)
 
+
+class ReindexRequest(BaseModel):
+    run_evals: bool = Field(
+        False,
+        description="If true, the Actions job runs evals after indexing",
+    )
+
+
+class ReindexResponse(BaseModel):
+    ok: bool
+    dispatched: bool
+    run_id: Optional[int] = None
+    run_number: Optional[int] = None
+    status: Optional[str] = None
+    conclusion: Optional[str] = None
+    html_url: str
+    jobs_url: Optional[str] = None
+    created_at: Optional[str] = None
+    run_evals: bool = False
+    message: Optional[str] = None
+
+
+# ---------- endpoints ----------
 
 @app.get("/health", tags=["meta"])
 def health():
@@ -205,6 +363,38 @@ def run_evals(body: EvalRequest):
     return {"ok": True, "label": body.label, "backend": body.backend, "k": body.k}
 
 
+@app.post(
+    "/jobs/reindex",
+    response_model=ReindexResponse,
+    tags=["jobs"],
+    summary="Start temporary reindex runner (GitHub Actions)",
+)
+def jobs_reindex(body: ReindexRequest = ReindexRequest()):
+    """
+    Dispatch the `reindex` workflow on GitHub Actions (a temporary runner).
+
+    Requires server env:
+      GITHUB_TOKEN  — PAT with Actions: write (and Contents: read)
+      GITHUB_OWNER  — default allanvarghese567-lab
+      GITHUB_REPO   — default rag-project
+      GITHUB_BRANCH — default main
+
+    Returns the Actions run URL when GitHub has registered the run.
+    """
+    result = _dispatch_reindex(body.run_evals)
+    return ReindexResponse(**result)
+
+
+@app.get(
+    "/jobs/reindex/{run_id}",
+    tags=["jobs"],
+    summary="Poll status of a reindex Actions run",
+)
+def jobs_reindex_status(run_id: int):
+    """Return status/conclusion/html_url for a workflow run id."""
+    return _get_run(run_id)
+
+
 @app.get("/embeddings", tags=["config"])
 def embeddings_config():
     path = config.EMBED_CONFIG_PATH
@@ -229,4 +419,5 @@ def root():
         "docs": "/docs",
         "health": "/health",
         "status": "/status",
+        "jobs": {"reindex": "POST /jobs/reindex"},
     }
