@@ -2,48 +2,211 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>RAG Control</title>
 <style>
-:root{--bg:#fff;--fg:#1a1a1a;--mut:#666;--bd:#e0e0e0;--ok:#0a7;--warn:#c80;--err:#c33;--p:#06c}
-*{box-sizing:border-box}body{font:14px/1.45 system-ui,sans-serif;margin:0;background:var(--bg);color:var(--fg)}
-header{padding:12px 16px;border-bottom:1px solid var(--bd);display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-h1{font-size:16px;margin:0}.tabs{display:flex;gap:4px;flex-wrap:wrap}button,input,select,textarea{font:inherit}
-button{cursor:pointer;padding:6px 12px;border:1px solid var(--bd);background:#f5f5f5;border-radius:6px}
-button.p{background:var(--p);color:#fff;border-color:var(--p)}button:disabled{opacity:.5}
-.tab{padding:6px 10px;border-radius:6px;border:1px solid transparent;background:transparent}.tab.on{background:#eef;border-color:#cce}
-main{padding:16px;max-width:900px;margin:0 auto}.card{border:1px solid var(--bd);border-radius:8px;padding:12px;margin:10px 0}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.grow{flex:1}.mut{color:var(--mut);font-size:12px}
-label{display:block;margin:8px 0 4px;font-size:12px;color:var(--mut)}input,select,textarea{width:100%;padding:6px 8px;border:1px solid var(--bd);border-radius:6px}
-.b{font-size:11px;padding:2px 6px;border-radius:4px}.b.ok{background:#e6f7f0;color:var(--ok)}.b.warn{background:#fff5e0;color:var(--warn)}.b.err{background:#fde;color:var(--err)}
-#log{font-family:ui-monospace,monospace;font-size:12px;white-space:pre-wrap;max-height:200px;overflow:auto;background:#f8f8f8;padding:8px;border-radius:6px}
+:root{--bg:#fff;--fg:#1a1a1a;--mut:#666;--card:#f5f5f4;--bd:#ddd;--ac:#2563eb;--ok:#16a34a;--bad:#dc2626;--warn:#d97706}
+@media(prefers-color-scheme:dark){:root{--bg:#161616;--fg:#eee;--mut:#999;--card:#222;--bd:#383838;--ac:#6ea0ff;--ok:#4ade80;--bad:#f87171;--warn:#fbbf24}}
+*{box-sizing:border-box}body{margin:0;font:15px system-ui,sans-serif;background:var(--bg);color:var(--fg)}
+main{max-width:720px;margin:auto;padding:12px}
+nav{display:flex;gap:6px;position:sticky;top:0;background:var(--bg);padding:8px 0;overflow-x:auto;z-index:2}
+button,input,select,textarea{font:inherit;color:inherit;background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:8px 12px}
+button{cursor:pointer}button.p{background:var(--ac);color:#fff;border-color:var(--ac)}button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+button:disabled{opacity:.5}.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;margin:12px 0}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.grow{flex:1}
+.mut{color:var(--mut);font-size:13px}.ok{color:var(--ok)}.bad{color:var(--bad)}
+label{display:block;margin:10px 0 4px;font-size:13px;color:var(--mut)}
+input,select,textarea{width:100%}textarea{resize:vertical;min-height:60px}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#111;color:#fff;padding:8px 14px;border-radius:8px;font-size:13px;opacity:0;transition:.2s;z-index:9;max-width:90%}
+#toast.show{opacity:1}#toast.err{background:var(--bad)}
+pre{margin:0;font:13px ui-monospace,monospace}
 </style></head><body>
-<header><h1>RAG Control</h1><div class="tabs" id="tabs"></div></header>
-<main id="main"><p class="mut">Loading… Set owner, repo and a PAT with repo scope in the Settings tab.</p></main>
+<main>
+<nav id=nav></nav>
+<div id=app></div>
+</main>
+<div id=toast></div>
 <script>
-/* Minimal shell so Pages deploys; full interactive UI from the original project zip can replace this file. */
-const S=JSON.parse(localStorage.getItem('rag-ui')||'{}');
-const tabs=['Settings','Profiles','Jobs','Webhooks'];
-let tab='Settings';
-function save(){localStorage.setItem('rag-ui',JSON.stringify(S))}
-function $(s){return document.querySelector(s)}
-function esc(t){return String(t??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function render(){
-  $('#tabs').innerHTML=tabs.map(t=>`<button class="tab ${t===tab?'on':''}" data-t="${t}">${t}</button>`).join('');
-  if(tab==='Settings'){
-    $('#main').innerHTML=`<div class="card"><b>Repository</b>
-      <label>Owner</label><input data-k="owner" value="${esc(S.owner||'')}">
-      <label>Repo</label><input data-k="repo" value="${esc(S.repo||'')}">
-      <label>GitHub PAT (repo scope)</label><input type="password" data-k="token" value="${esc(S.token||'')}">
-      <div class="row" style="margin-top:10px"><button class="p" data-a="save">Save</button></div>
-      <p class="mut">This static UI talks to the GitHub API to edit config/embeddings.json and trigger Actions. The live RAG API (FastAPI) is separate — point clients at your hosted uvicorn URL.</p></div>`;
-  } else {
-    $('#main').innerHTML=`<div class="card"><p class="mut">Full Profiles / Jobs / Webhooks UI is in the original <code>rag_project.zip</code>. Replace <code>ui/index.html</code> with that file for the complete experience (embedding profile editor, cron, job status, smee/Worker live feed).</p></div>`;
+const $=s=>document.querySelector(s);
+const esc=t=>String(t??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const S=JSON.parse(sessionStorage.getItem('rc')||'{}');S.branch=S.branch||'main';
+const save=()=>sessionStorage.setItem('rc',JSON.stringify(S));
+const say=(m,err)=>{const t=$('#toast');t.textContent=m;t.className=err?'show err':'show';clearTimeout(say._t);say._t=setTimeout(()=>t.className='',3200)};
+
+const TABS=[['api','Live API'],['emb','Embeddings'],['jobs','Jobs'],['sched','Schedule'],['hooks','Webhooks'],['conn','Connect']];
+let tab=S.apiBase?'api':(S.token?'emb':'conn');
+let cfg=null,cfgSha='',wf='',wfSha='',dirty=0,edit=null,runs=[],open=null,steps={},evals=0;
+let hl=[],hf={url:'',secret:'',ev:{workflow_run:1,workflow_job:0,push:0}},feed=[],ws=null,wsOk=0,wst=null,retry=0;
+
+/* ---- Live FastAPI ---- */
+async function api(path, opts={}){
+  const base=(S.apiBase||'').replace(/\/$/,'');
+  if(!base) throw new Error('Set API base URL under Connect');
+  const hdr={...(opts.headers||{})};
+  if(opts.body && !(opts.body instanceof FormData)) hdr['Content-Type']='application/json';
+  const r=await fetch(base+path,{...opts,headers:hdr});
+  const t=await r.text();
+  let j; try{j=JSON.parse(t)}catch{j={raw:t}}
+  if(!r.ok){
+    const d=j.detail;
+    throw new Error(typeof d==='string'?d:(Array.isArray(d)?d.map(x=>x.msg||JSON.stringify(x)).join('; '):j.message||t||('HTTP '+r.status)));
   }
+  return j;
 }
-document.body.addEventListener('click',e=>{
-  const t=e.target.closest('[data-t]'); if(t){tab=t.dataset.t;render()}
-  if(e.target.dataset.a==='save'){
-    document.querySelectorAll('[data-k]').forEach(el=>S[el.dataset.k]=el.value.trim());
-    save(); alert('Saved locally');
-  }
+function apiV(){
+  const st=window._apiStatus||null;
+  const ans=window._apiAnswer||null;
+  const tr=window._apiTraces||null;
+  return `<div class=card>
+<b>Live RAG API</b>
+<p class=mut>Talks to your hosted FastAPI. Base URL: <code>${esc(S.apiBase||'(not set — open Connect)')}</code></p>
+<div class=row style="margin-top:8px">
+<button class=p data-a=apistatus>Refresh status</button>
+<button data-a=apitraces>Load traces</button>
+<button data-a=apihealth>Health</button>
+</div>
+${st?`<div style="margin-top:10px" class=mut>
+Chunks: <b>${st.chunks}</b> · Sources: ${(st.sources||[]).map(s=>esc(s)).join(', ')||'none'}<br>
+Embedding: <code>${esc(st.embedding_profile?.id||st.embedding_profile?.error||'?')}</code> · LLM: <code>${esc(st.llm_model||'?')}</code>
+</div>`:''}
+</div>
+<div class=card>
+<b>Ask</b>
+<label>Question</label>
+<textarea id=apiq rows=3 placeholder="What does the document say about …?">${esc(window._apiQ||'')}</textarea>
+<div class=row>
+<div class=grow><label>Backend</label>
+<select id=apibackend>
+<option value=chroma ${!window._apiBackend||window._apiBackend==='chroma'?'selected':''}>chroma</option>
+<option value=numpy ${window._apiBackend==='numpy'?'selected':''}>numpy</option>
+<option value=hybrid ${window._apiBackend==='hybrid'?'selected':''}>hybrid</option>
+<option value="chroma+rerank" ${window._apiBackend==='chroma+rerank'?'selected':''}>chroma+rerank</option>
+<option value="hybrid+rerank" ${window._apiBackend==='hybrid+rerank'?'selected':''}>hybrid+rerank</option>
+</select></div>
+<div><label>k</label><input id=apik type=number value="${window._apiK||5}" min=1 max=50 style="width:72px"></div>
+</div>
+<div class=row style="margin-top:10px"><button class=p data-a=apiask>Ask</button></div>
+${ans?`<div style="margin-top:12px"><b>Answer</b><pre style="white-space:pre-wrap;background:var(--bg);padding:10px;border-radius:8px;border:1px solid var(--bd);margin:6px 0">${esc(ans.answer)}</pre>
+<details open style="margin-top:8px"><summary class=mut>Hits (${(ans.hits||[]).length}) · backend ${esc(ans.backend)} · k ${ans.k}</summary>
+${(ans.hits||[]).map(h=>`<div class=card style="margin:6px 0"><div class=mut>${esc(h.source)} · score ${h.score!=null?Number(h.score).toFixed(3):'?'}</div><div style="font-size:13px">${esc((h.content||'').slice(0,500))}${(h.content||'').length>500?'…':''}</div></div>`).join('')}
+</details></div>`:''}
+</div>
+<div class=card>
+<b>Ingest PDF</b>
+<label>PDF file</label>
+<input id=apifile type=file accept=".pdf,application/pdf">
+<div class=row style="margin-top:10px"><button class=p data-a=apiingest>Upload &amp; index</button></div>
+<p class=mut>Re-uploading the same filename replaces its previous chunks on the server.</p>
+</div>
+${tr?`<div class=card><b>Recent traces</b>
+${(tr.traces||[]).length?(tr.traces||[]).map(t=>`<div class=card style="margin:6px 0">
+<div class=row><b>${esc(t.name)}</b><span class="mut grow">${t.total_ms} ms · ${esc(t.id)}</span></div>
+${(t.spans||[]).map(s=>`<div class=mut style="font-family:ui-monospace,monospace;font-size:12px">${esc(s.name)} ${s.ms} ms ${Object.entries(s.data||{}).map(([k,v])=>k+'='+v).join(' ')}</div>`).join('')}
+</div>`).join(''):'<p class=mut>No traces yet.</p>'}
+</div>`:''}`;
+}
+
+/* ---- GitHub helpers (config / jobs) ---- */
+async function gh(p,o={}){
+  const r=await fetch(`https://api.github.com/repos/${S.owner}/${S.repo}${p}`,{...o,cache:'no-cache',headers:{Accept:'application/vnd.github+json',Authorization:`Bearer ${S.token}`,'X-GitHub-Api-Version':'2022-11-28',...(o.body?{'Content-Type':'application/json'}:{})}});
+  if(r.status===304) return null;
+  const t=await r.text(); let j; try{j=JSON.parse(t)}catch{j={message:t}}
+  if(!r.ok) throw new Error(j.message||t||r.status);
+  return j;
+}
+async function loadCfg(){
+  const r=await fetch(`https://api.github.com/repos/${S.owner}/${S.repo}/contents/config/embeddings.json?ref=${S.branch}`,{headers:{Accept:'application/vnd.github+json',Authorization:`Bearer ${S.token}`,'X-GitHub-Api-Version':'2022-11-28'}});
+  const j=await r.json();
+  if(!r.ok) throw new Error(j.message||'config load failed');
+  cfg=JSON.parse(atob(j.content.replace(/\n/g,''))); cfgSha=j.sha;
+}
+
+conn=()=>`<div class=card><b>Live RAG API</b>
+<label>API base URL (no trailing slash)</label><input data-c=apiBase value="${esc(S.apiBase||'')}" placeholder="https://rag-api.onrender.com">
+<p class=mut>Your free FastAPI host. Used by the Live API tab for /ask, /ingest, /status, /traces.</p>
+<div class=row style="margin-top:8px"><button class=p data-a=apisave>Save API URL</button></div>
+</div>
+<div class=card><b>GitHub (config &amp; jobs)</b>
+<label>Owner</label><input data-c=owner value="${esc(S.owner||'')}">
+<label>Repository</label><input data-c=repo value="${esc(S.repo||'')}">
+<label>Branch</label><input data-c=branch value="${esc(S.branch||'main')}">
+<label>Fine-grained token (sessionStorage only)</label><input data-c=token type=password value="${esc(S.token||'')}">
+<div class=row style="margin-top:10px"><button class=p data-a=connect>Connect GitHub</button></div>
+<p class=mut>Token scopes: Contents RW, Actions RW, Workflows RW, Webhooks RW, Metadata R.</p></div>`;
+
+emb=()=>{
+  if(!cfg) return `<p class=mut>Connect GitHub first (Connect tab).</p>`;
+  return `<div class=card><b>Embedding profiles</b>
+<p class=mut>Active: <code>${esc(cfg.active)}</code> · edit via repo file <code>config/embeddings.json</code> or full UI from original zip.</p>
+${(cfg.profiles||[]).map(p=>`<div class=card style="margin:6px 0"><b>${esc(p.id)}</b> <span class=mut>${esc(p.provider)} / ${esc(p.model)}</span>${p.id===cfg.active?' <span class=ok>● active</span>':''}</div>`).join('')}
+</div>`;
+};
+
+jobs=()=>`<div class=card><b>Jobs</b>
+<p class=mut>Trigger reindex via Actions after connecting GitHub. Full job polling UI is in the original project zip.</p>
+<div class=row><button class=p data-a=run ${S.token?'':'disabled'}>Run reindex</button></div>
+</div>`;
+
+sched=()=>`<div class=card><b>Schedule</b><p class=mut>Cron is in <code>.github/workflows/reindex.yml</code>. Full editor in original UI.</p></div>`;
+
+hooksV=()=>`<div class=card><b>Webhooks</b><p class=mut>Configure under Connect + original UI for smee/Worker live feed.</p></div>`;
+
+function render(){
+  $('#nav').innerHTML=TABS.map(([k,v])=>`<button data-t=${k} class="${k===tab?'on':''}">${v}</button>`).join('');
+  const views={api:apiV,emb,jobs,sched,conn,hooks:hooksV};
+  $('#app').innerHTML=(views[tab]||conn)();
+}
+
+document.addEventListener('click',async e=>{
+  if(e.target.closest('a')) return;
+  const t=e.target.closest('[data-a],[data-t]'); if(!t) return;
+  const {a,t:tb}=t.dataset;
+  try{
+    if(tb){tab=tb;render();return}
+    if(a==='apisave'){save();say('API URL saved');tab='api';render();return}
+    if(a==='apihealth'){const j=await api('/health');say('Health: '+(j.status||JSON.stringify(j)));return}
+    if(a==='apistatus'){window._apiStatus=await api('/status');say('Status loaded');render();return}
+    if(a==='apitraces'){window._apiTraces=await api('/traces?limit=15');say('Traces loaded');render();return}
+    if(a==='apiask'){
+      window._apiQ=($('#apiq')||{}).value||'';
+      window._apiBackend=($('#apibackend')||{}).value||'chroma';
+      window._apiK=parseInt(($('#apik')||{}).value||'5',10)||5;
+      if(!window._apiQ.trim()) throw new Error('Enter a question');
+      say('Asking…');
+      window._apiAnswer=await api('/ask',{method:'POST',body:JSON.stringify({question:window._apiQ,backend:window._apiBackend,k:window._apiK})});
+      say('Done'); render(); return;
+    }
+    if(a==='apiingest'){
+      const f=($('#apifile')||{}).files && $('#apifile').files[0];
+      if(!f) throw new Error('Choose a PDF');
+      say('Uploading '+f.name+'…');
+      const fd=new FormData(); fd.append('file',f,f.name);
+      const j=await api('/ingest',{method:'POST',body:fd});
+      say('Ingested '+j.file+': '+j.chunks+' chunks');
+      try{window._apiStatus=await api('/status')}catch(_){}
+      render(); return;
+    }
+    if(a==='connect'){
+      save();
+      await gh('');
+      cfg=null;
+      await loadCfg();
+      tab='emb'; say('Connected');
+    }
+    if(a==='run'){
+      await gh('/actions/workflows/reindex.yml/dispatches',{method:'POST',body:JSON.stringify({ref:S.branch||'main',inputs:{run_evals:'false'}})});
+      say('Reindex requested');
+    }
+  }catch(err){say(err.message||String(err),1)}
+  render();
 });
-render();
+
+document.addEventListener('input',e=>{
+  const d=e.target.dataset;
+  if(d.c){S[d.c]=e.target.value.trim();}
+});
+
+(async()=>{
+  if(S.token && S.owner && S.repo){
+    try{await loadCfg()}catch(e){say(e.message,1)}
+  }
+  render();
+})();
 </script></body></html>
