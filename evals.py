@@ -11,10 +11,13 @@ Usage:
     python evals.py --label hybrid --backend hybrid --k 5
     python evals.py --report
 """
-import json
-import time
+from __future__ import annotations
+
 import argparse
+import json
 import statistics
+import time
+from typing import Any
 
 import config
 import rag
@@ -28,9 +31,10 @@ JUDGE_SYS = (
 )
 
 
-def judge(q, ref, cand):
+def judge(q: str, ref: str, cand: str) -> dict[str, Any]:
     """Ask the LLM to grade one answer. Returns {"correct": bool, "reason": str}."""
     import llm
+
     text, _ = llm.complete(
         JUDGE_SYS,
         f"Question: {q}\nReference: {ref}\nCandidate: {cand}",
@@ -43,10 +47,11 @@ def judge(q, ref, cand):
         return {"correct": False, "reason": "judge parse error"}
 
 
-def run(label, backend="chroma", k=config.TOP_K):
+def run(label: str, backend: str = "chroma", k: int = config.TOP_K) -> None:
     """Run every eval question, print a diagnosis, append a summary line."""
-    cases = json.load(open(config.EVAL_SET_PATH))
-    rows = []
+    with open(config.EVAL_SET_PATH, encoding="utf-8") as f:
+        cases = json.load(f)
+    rows: list[dict[str, Any]] = []
     config.SHOW_TRACES = False
     try:
         for c in cases:
@@ -56,28 +61,40 @@ def run(label, backend="chroma", k=config.TOP_K):
             blob = " ".join(h["content"] for h in hits).lower()
             hit = any(kw.lower() in blob for kw in c["keywords"])
             v = judge(c["question"], c["expected_answer"], answer)
-            rows.append({"q": c["question"], "hit": hit,
-                         "correct": bool(v.get("correct")),
-                         "reason": v.get("reason", ""), "ms": ms})
+            rows.append(
+                {
+                    "q": c["question"],
+                    "hit": hit,
+                    "correct": bool(v.get("correct")),
+                    "reason": v.get("reason", ""),
+                    "ms": ms,
+                }
+            )
     finally:
         config.SHOW_TRACES = True
 
     n = len(rows)
+    if n == 0:
+        print("No eval cases found.")
+        return
     summary = {
-        "label": label, "backend": backend, "k": k,
-        "chunk_size": config.CHUNK_SIZE, "overlap": config.CHUNK_OVERLAP,
+        "label": label,
+        "backend": backend,
+        "k": k,
+        "chunk_size": config.CHUNK_SIZE,
+        "overlap": config.CHUNK_OVERLAP,
         "n": n,
         "retrieval_hit": round(sum(r["hit"] for r in rows) / n, 3),
         "accuracy": round(sum(r["correct"] for r in rows) / n, 3),
         "avg_ms": round(statistics.mean(r["ms"] for r in rows), 1),
     }
-    with open(config.EVAL_RESULTS_PATH, "a") as f:
+    with open(config.EVAL_RESULTS_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(summary) + "\n")
     diagnose(rows)
     print("\n", summary)
 
 
-def diagnose(rows):
+def diagnose(rows: list[dict[str, Any]]) -> None:
     """Bucket the results to show whether failures are retrieval or generation."""
     both = sum(r["hit"] and r["correct"] for r in rows)
     gen_fail = [r for r in rows if r["hit"] and not r["correct"]]
@@ -91,25 +108,31 @@ def diagnose(rows):
         print(f" x {r['q']}\n   {r['reason']}")
 
 
-def report():
+def report() -> None:
     """Print a comparison table of every past eval run."""
     print(f"{'label':<18}{'backend':<16}{'k':<3}{'chunk':<7}{'hit':<7}{'acc':<7}{'ms':<8}")
     try:
-        lines = open(config.EVAL_RESULTS_PATH).readlines()
+        with open(config.EVAL_RESULTS_PATH, encoding="utf-8") as f:
+            lines = f.readlines()
     except FileNotFoundError:
         print("(no eval runs yet)")
         return
     for line in lines:
         s = json.loads(line)
-        print(f"{s['label']:<18}{s['backend']:<16}{s['k']:<3}{s['chunk_size']:<7}"
-              f"{s['retrieval_hit']:<7}{s['accuracy']:<7}{s['avg_ms']:<8}")
+        print(
+            f"{s['label']:<18}{s['backend']:<16}{s['k']:<3}{s['chunk_size']:<7}"
+            f"{s['retrieval_hit']:<7}{s['accuracy']:<7}{s['avg_ms']:<8}"
+        )
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--label", default="baseline")
-    p.add_argument("--backend", default="chroma",
-                   help="numpy | chroma | hybrid, optionally +rerank")
+    p.add_argument(
+        "--backend",
+        default="chroma",
+        help="numpy | chroma | hybrid, optionally +rerank",
+    )
     p.add_argument("--k", type=int, default=config.TOP_K)
     p.add_argument("--report", action="store_true")
     a = p.parse_args()

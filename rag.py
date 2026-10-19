@@ -6,33 +6,38 @@ Usage:
     python rag.py my.pdf "What is the refund window?"
     python rag.py my.pdf "..." hybrid+rerank        # pick a backend
 """
+from __future__ import annotations
+
 import sys
+from typing import Any
 
 import config
-import retrieval
 import llm
-from ingest import ingest
+import retrieval
 from compare import compare
-from tracing import trace, span
+from ingest import ingest
+from tracing import span, trace
 
 SYSTEM = "Answer ONLY from the context. If it's not there, say you don't know."
 
 
-def ask(question, backend="chroma", k=config.TOP_K, llm_profile=None):
+def ask(
+    question: str,
+    backend: str = "chroma",
+    k: int = config.TOP_K,
+    llm_profile: str | dict[str, Any] | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
     """
     Answer a question from the stored documents.
     Returns (answer_text, hits). The whole run is traced: retrieval spans,
     plus an "llm" span with token counts and cost.
     llm_profile: optional profile dict or id string; default = active_llm().
     """
-    if isinstance(llm_profile, str):
-        cfg = __import__("json").load(open(config.LLM_CONFIG_PATH))
-        llm_profile = next(p for p in cfg["profiles"] if p["id"] == llm_profile)
+    prof = config.resolve_llm_profile(llm_profile)
 
     with trace("ask", question=question[:80], backend=backend):
         hits = retrieval.retrieve(question, k, backend)
         ctx = "\n\n---\n\n".join(h["content"] for h in hits)
-        prof = llm_profile or config.active_llm()
         with span("llm", model=prof["model"], profile=prof["id"]) as s:
             text, usage = llm.complete(
                 SYSTEM,

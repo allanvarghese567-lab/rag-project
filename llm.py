@@ -12,7 +12,7 @@ Keys are read from the env var named in the profile (never stored in the file).
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, Callable
 
 import config
 
@@ -21,8 +21,11 @@ _clients: dict[str, Any] = {}
 
 def _anthropic(p: dict, system: str, user: str, max_tokens: int) -> tuple[str, dict]:
     from anthropic import Anthropic
+
     if p["id"] not in _clients:
-        _clients[p["id"]] = Anthropic(api_key=os.getenv(p.get("api_key_env", "ANTHROPIC_API_KEY")))
+        _clients[p["id"]] = Anthropic(
+            api_key=os.getenv(p.get("api_key_env", "ANTHROPIC_API_KEY"))
+        )
     msg = _clients[p["id"]].messages.create(
         model=p["model"],
         max_tokens=max_tokens,
@@ -39,6 +42,7 @@ def _anthropic(p: dict, system: str, user: str, max_tokens: int) -> tuple[str, d
 
 def _openai_like(p: dict, system: str, user: str, max_tokens: int) -> tuple[str, dict]:
     from openai import OpenAI
+
     if p["id"] not in _clients:
         _clients[p["id"]] = OpenAI(
             api_key=os.getenv(p.get("api_key_env", "OPENAI_API_KEY")),
@@ -60,14 +64,19 @@ def _openai_like(p: dict, system: str, user: str, max_tokens: int) -> tuple[str,
     }
 
 
-PROVIDERS = {
+PROVIDERS: dict[str, Callable[..., tuple[str, dict]]] = {
     "anthropic": _anthropic,
     "openai": _openai_like,
     "openai_compatible": _openai_like,
 }
 
 
-def complete(system: str, user: str, profile: dict | None = None, max_tokens: int | None = None) -> tuple[str, dict]:
+def complete(
+    system: str,
+    user: str,
+    profile: dict | None = None,
+    max_tokens: int | None = None,
+) -> tuple[str, dict]:
     """
     Run one chat completion with the given (or active) profile.
     Returns (text, usage) where usage has tokens_in, tokens_out, cost_usd, model, profile_id.
@@ -75,14 +84,17 @@ def complete(system: str, user: str, profile: dict | None = None, max_tokens: in
     p = profile or config.active_llm()
     fn = PROVIDERS.get(p["provider"])
     if fn is None:
-        raise ValueError(f"Unknown LLM provider: {p.get('provider')!r}. "
-                         f"Known: {', '.join(PROVIDERS)}")
+        raise ValueError(
+            f"Unknown LLM provider: {p.get('provider')!r}. "
+            f"Known: {', '.join(PROVIDERS)}"
+        )
     mt = max_tokens if max_tokens is not None else int(p.get("max_tokens") or 800)
     text, usage = fn(p, system, user, mt)
     pin = float(p.get("price_in") or config.PRICE_IN or 0)
     pout = float(p.get("price_out") or config.PRICE_OUT or 0)
     usage["cost_usd"] = round(
-        (usage["tokens_in"] * pin + usage["tokens_out"] * pout) / 1e6, 5)
+        (usage["tokens_in"] * pin + usage["tokens_out"] * pout) / 1e6, 5
+    )
     usage["model"] = p["model"]
     usage["profile_id"] = p["id"]
     return text, usage

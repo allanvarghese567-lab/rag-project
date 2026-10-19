@@ -21,8 +21,8 @@ from typing import Any, Optional
 
 import requests
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 import config
@@ -128,7 +128,7 @@ app = FastAPI(
         "Open **/console** for one-click buttons. "
         "Use as a custom connector in automation tools via OpenAPI."
     ),
-    version="1.2.1",
+    version="1.2.2",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -402,7 +402,8 @@ def traces(limit: int = Query(20, ge=1, le=200)):
     path = config.TRACE_PATH
     if not os.path.exists(path):
         return {"traces": []}
-    lines = open(path).read().strip().splitlines()
+    with open(path, encoding="utf-8") as f:
+        lines = f.read().strip().splitlines()
     items = []
     for line in reversed(lines[-limit:]):
         try:
@@ -415,6 +416,7 @@ def traces(limit: int = Query(20, ge=1, le=200)):
 @app.post("/evals", tags=["evals"])
 def run_evals(body: EvalRequest):
     import evals
+
     try:
         evals.run(body.label, backend=body.backend, k=body.k)
     except Exception as e:
@@ -438,7 +440,7 @@ def embeddings_config():
     path = config.EMBED_CONFIG_PATH
     if not os.path.exists(path):
         raise HTTPException(404, "embeddings.json not found")
-    return json.load(open(path))
+    return config.load_json(path)
 
 
 @app.get("/llms", tags=["config"])
@@ -446,7 +448,7 @@ def llms_config():
     path = config.LLM_CONFIG_PATH
     if not os.path.exists(path):
         raise HTTPException(404, "llms.json not found")
-    return json.load(open(path))
+    return config.load_json(path)
 
 
 @app.get("/console", response_class=HTMLResponse, include_in_schema=False)

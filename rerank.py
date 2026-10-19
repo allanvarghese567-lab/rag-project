@@ -1,6 +1,10 @@
 """
 rerank.py - cross-encoder reranker (local sentence-transformers model).
 """
+from __future__ import annotations
+
+from typing import Any
+
 import config
 
 _model = None
@@ -10,11 +14,12 @@ def _get_model():
     global _model
     if _model is None:
         from sentence_transformers import CrossEncoder
+
         _model = CrossEncoder(config.RERANK_MODEL)
     return _model
 
 
-def rerank(question, hits, k):
+def rerank(question: str, hits: list[dict[str, Any]], k: int) -> list[dict[str, Any]]:
     """Score (question, chunk) pairs and keep the top-k."""
     if not hits:
         return []

@@ -4,12 +4,15 @@ ingest.py - turn a PDF into stored, searchable chunks.
 Pipeline: load -> chunk -> embed -> merge into store -> save -> sync Chroma.
 Every stage is timed with a span inside one "ingest" trace.
 """
+from __future__ import annotations
+
 import os
+
 import numpy as np
 
 import helpers
 import store
-from tracing import trace, span
+from tracing import span, trace
 
 
 def ingest(path: str) -> int:
@@ -25,17 +28,25 @@ def ingest(path: str) -> int:
             texts = helpers.chunk(text)
             s["data"]["chunks"] = len(texts)
 
+        if not texts:
+            return 0
+
         new_vecs = helpers.embed(texts)  # helpers adds its own "embed" span
-        new_rows = [{"id": f"{name}-{i}", "source": name, "content": t}
-                    for i, t in enumerate(texts)]
+        new_rows = [
+            {"id": f"{name}-{i}", "source": name, "content": t}
+            for i, t in enumerate(texts)
+        ]
 
         rows, vecs = store.load_store()
         if rows and vecs.shape[1] != new_vecs.shape[1]:
-            raise ValueError("Embedding size changed (%d -> %d). Delete store/ and re-ingest all docs."
-                             % (vecs.shape[1], new_vecs.shape[1]))
+            raise ValueError(
+                "Embedding size changed (%d -> %d). Delete store/ and re-ingest all docs."
+                % (vecs.shape[1], new_vecs.shape[1])
+            )
         if rows:  # drop any old chunks from this same file, then append
             keep = [i for i, r in enumerate(rows) if r["source"] != name]
-            rows, vecs = [rows[i] for i in keep], vecs[keep]
+            rows = [rows[i] for i in keep]
+            vecs = vecs[keep] if keep else np.empty((0, new_vecs.shape[1]), dtype="float32")
             vecs = np.vstack([vecs, new_vecs]) if len(rows) else new_vecs
         else:
             vecs = new_vecs

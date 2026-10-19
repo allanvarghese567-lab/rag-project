@@ -7,41 +7,66 @@ Add "+rerank" : e.g. "chroma+rerank", "hybrid+rerank"
 Scores are NOT comparable across backends: cosine (0-1), RRF (max ~0.033) and
 cross-encoder logits (can be negative) are different scales.
 """
+from __future__ import annotations
+
+from typing import Any
+
 import config
 import helpers
-import store
 import kwsearch
 import rerank
+import store
 from tracing import span
 
 
-def retrieve_numpy(qvec, k=config.TOP_K):
+def retrieve_numpy(qvec, k: int = config.TOP_K) -> list[dict[str, Any]]:
     """Exact search: dot product against every stored vector (= cosine)."""
     rows, vecs = store.load_store()
     if not rows:
         return []
-    sims = vecs @ qvec                       # vectors are normalized
+    sims = vecs @ qvec  # vectors are normalized
     top = sims.argsort()[::-1][:k]
-    return [{"content": rows[i]["content"], "source": rows[i]["source"],
-             "score": float(sims[i])} for i in top]
+    return [
+        {
+            "content": rows[i]["content"],
+            "source": rows[i]["source"],
+            "score": float(sims[i]),
+        }
+        for i in top
+    ]
 
 
-def retrieve_chroma(qvec, k=config.TOP_K, source=None):
+def retrieve_chroma(
+    qvec, k: int = config.TOP_K, source: str | None = None
+) -> list[dict[str, Any]]:
     """Approximate (HNSW) search via Chroma; optionally filter by source file."""
     r = store.get_collection().query(
-        query_embeddings=[qvec.tolist()], n_results=k,
-        where={"source": source} if source else None)
-    return [{"content": d, "source": m["source"], "score": 1 - dist}
-            for d, m, dist in zip(r["documents"][0], r["metadatas"][0],
-                                  r["distances"][0])]
+        query_embeddings=[qvec.tolist()],
+        n_results=k,
+        where={"source": source} if source else None,
+    )
+    docs = r.get("documents") or [[]]
+    metas = r.get("metadatas") or [[]]
+    dists = r.get("distances") or [[]]
+    if not docs[0]:
+        return []
+    return [
+        {"content": d, "source": m["source"], "score": 1 - dist}
+        for d, m, dist in zip(docs[0], metas[0], dists[0])
+    ]
 
 
-def rrf(rank_lists, k=config.TOP_K, c=config.RRF_C):
+def rrf(
+    rank_lists: list[list[dict[str, Any]]],
+    k: int = config.TOP_K,
+    c: int = config.RRF_C,
+) -> list[dict[str, Any]]:
     """
     Reciprocal Rank Fusion: merge several ranked lists using rank positions
     only. A chunk earns 1/(c + rank) from each list it appears in.
     """
-    scores, items = {}, {}
+    scores: dict[str, float] = {}
+    items: dict[str, dict[str, Any]] = {}
     for hits in rank_lists:
         for rank, h in enumerate(hits):
             key = h["content"]
@@ -51,7 +76,7 @@ def rrf(rank_lists, k=config.TOP_K, c=config.RRF_C):
     return [{**items[key], "score": round(scores[key], 4)} for key in best]
 
 
-def retrieve_hybrid(question, qvec, k=config.TOP_K):
+def retrieve_hybrid(question: str, qvec, k: int = config.TOP_K) -> list[dict[str, Any]]:
     """Run vector search and BM25 keyword search, then fuse them with RRF."""
     pool = config.HYBRID_POOL
     with span("vector_search", pool=pool):
@@ -62,7 +87,9 @@ def retrieve_hybrid(question, qvec, k=config.TOP_K):
         return rrf([vec, kw], k)
 
 
-def retrieve(question, k=config.TOP_K, backend="chroma", **kw):
+def retrieve(
+    question: str, k: int = config.TOP_K, backend: str = "chroma", **kw
+) -> list[dict[str, Any]]:
     """
     Main entry point. Embeds the question once, searches with the chosen
     backend, and optionally reranks ("<backend>+rerank").
