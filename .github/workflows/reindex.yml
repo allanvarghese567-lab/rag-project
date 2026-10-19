@@ -1,7 +1,7 @@
 name: reindex
 on:
   schedule:
-    - cron: '0 */6 * * *'        # editable from the UI (UTC)
+    - cron: '0 */6 * * *'
   workflow_dispatch:
     inputs:
       run_evals:
@@ -9,9 +9,9 @@ on:
         type: boolean
         default: false
   push:
-    paths: ['config/embeddings.json', 'docs/**']
+    paths: ['backend/config/embeddings.json', 'docs/**']
   repository_dispatch:
-    types: [reindex]             # external trigger / webhook-style entry point
+    types: [reindex]
 concurrency:
   group: reindex
   cancel-in-progress: false
@@ -19,15 +19,18 @@ jobs:
   reindex:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: '3.11', cache: pip }
+        with: { python-version: '3.11', cache: pip, cache-dependency-path: backend/requirements.txt }
       - id: cache
         uses: actions/cache@v4
         with:
-          path: store
-          key: store-${{ hashFiles('docs/**', 'config/embeddings.json', 'config.py', 'helpers.py') }}
+          path: backend/store
+          key: store-${{ hashFiles('docs/**', 'backend/config/embeddings.json', 'backend/ragcore/**') }}
       - name: Install
         run: |
           pip install -r requirements.txt

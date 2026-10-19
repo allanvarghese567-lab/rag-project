@@ -1,0 +1,7 @@
+[
+  {
+    "question": "What is the refund window?",
+    "keywords": ["refund", "days"],
+    "expected_answer": "Refunds are available within 30 days of purchase."
+  }
+]
