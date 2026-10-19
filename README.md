@@ -2,6 +2,7 @@
 
 Modular Retrieval-Augmented Generation system in Python.
 
+- **Package:** core logic lives in `ragcore/` (root modules are thin compatibility shims)
 - **Storage:** JSON + NumPy source of truth; Chroma rebuildable index
 - **Retrieval:** vector / BM25 / hybrid (RRF) + optional cross-encoder rerank
 - **Pluggable embeddings** via `config/embeddings.json`
@@ -9,6 +10,36 @@ Modular Retrieval-Augmented Generation system in Python.
 - **Observability:** per-stage traces, tokens, cost
 - **Live API:** FastAPI + Swagger — free-hostable, OpenAPI for automation tools
 - **UI:** Live API tab calls `/ask` / `/ingest`; LLMs tab lists gateway profiles
+
+## Layout
+
+```
+rag-project/
+├── ragcore/           # library package (preferred imports)
+│   ├── config.py
+│   ├── store.py
+│   ├── retrieval.py
+│   ├── llm.py
+│   ├── embeddings.py
+│   ├── ingest.py
+│   ├── rag.py
+│   └── ...
+├── api.py             # FastAPI app (uvicorn api:app)
+├── config.py          # shim → ragcore.config
+├── config/            # embeddings.json, llms.json
+├── jobs/run_job.py    # GitHub Actions reindex entry
+├── tests/
+└── ui/
+```
+
+Prefer:
+
+```python
+from ragcore.rag import ask
+from ragcore import retrieval, config
+```
+
+Legacy `import config` / `import rag` still work via root shims.
 
 ## Quick start
 
@@ -18,6 +49,12 @@ pip install -r requirements.txt
 cp .env.example .env   # OPENAI_API_KEY, ANTHROPIC_API_KEY, optional LLM_API_KEY
 uvicorn api:app --reload --host 0.0.0.0 --port 8000
 # → http://localhost:8000/docs
+```
+
+### Tests (offline)
+
+```bash
+pytest tests/ -q
 ```
 
 ## LLM gateways (`config/llms.json`)
@@ -66,4 +103,4 @@ Providers: `anthropic` | `openai` | `openai_compatible` (any OpenAI-compatible c
 
 Build: `pip install -r requirements.txt`  
 Start: `uvicorn api:app --host 0.0.0.0 --port $PORT`  
-Secrets: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, optional `LLM_API_KEY`
+Secrets: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, optional `LLM_API_KEY` / `GROQ_API_KEY`
