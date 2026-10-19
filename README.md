@@ -1,106 +1,62 @@
-# RAG Project: Retrieval + Observability + Live API
+# RAG Project: Backend + UI + Worker
 
-Modular Retrieval-Augmented Generation system in Python.
+Modular Retrieval-Augmented Generation system, split by concern:
 
-- **Package:** core logic lives in `ragcore/` (root modules are thin compatibility shims)
-- **Storage:** JSON + NumPy source of truth; Chroma rebuildable index
-- **Retrieval:** vector / BM25 / hybrid (RRF) + optional cross-encoder rerank
-- **Pluggable embeddings** via `config/embeddings.json`
-- **Pluggable LLM gateways** via `config/llms.json` (Anthropic, OpenAI, OpenAI-compatible)
-- **Observability:** per-stage traces, tokens, cost
-- **Live API:** FastAPI + Swagger — free-hostable, OpenAPI for automation tools
-- **UI:** Live API tab calls `/ask` / `/ingest`; LLMs tab lists gateway profiles
+| Folder | Role |
+|--------|------|
+| **`backend/`** | FastAPI API, `ragcore` library, embeddings/LLM config, jobs, tests |
+| **`ui/`** | Static web UI (GitHub Pages) |
+| **`worker/`** | Cloudflare Worker — GitHub webhooks → live WebSocket fan-out |
+| **`docs/`** | PDFs to index (reindex job) |
 
 ## Layout
 
 ```
 rag-project/
-├── ragcore/           # library package (preferred imports)
-│   ├── config.py
-│   ├── store.py
-│   ├── retrieval.py
-│   ├── llm.py
-│   ├── embeddings.py
-│   ├── ingest.py
-│   ├── rag.py
-│   └── ...
-├── api.py             # FastAPI app (uvicorn api:app)
-├── config.py          # shim → ragcore.config
-├── config/            # embeddings.json, llms.json
-├── jobs/run_job.py    # GitHub Actions reindex entry
-├── tests/
-└── ui/
+├── backend/
+│   ├── api.py              # FastAPI (uvicorn api:app)
+│   ├── ragcore/            # library package
+│   ├── config/             # embeddings.json, llms.json
+│   ├── jobs/run_job.py     # GitHub Actions reindex
+│   ├── tests/
+│   ├── requirements.txt
+│   └── .env.example
+├── ui/                     # Pages UI
+├── worker/                 # Cloudflare webhook hub
+├── docs/                   # source PDFs
+└── .github/workflows/
 ```
 
-Prefer:
-
-```python
-from ragcore.rag import ask
-from ragcore import retrieval, config
-```
-
-Legacy `import config` / `import rag` still work via root shims.
-
-## Quick start
+## Backend quick start
 
 ```bash
+cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # OPENAI_API_KEY, ANTHROPIC_API_KEY, optional LLM_API_KEY
+cp .env.example .env   # add keys
 uvicorn api:app --reload --host 0.0.0.0 --port 8000
 # → http://localhost:8000/docs
 ```
 
-### Tests (offline)
+Tests:
 
 ```bash
-pytest tests/ -q
+cd backend && pytest tests/ -q
 ```
 
-## LLM gateways (`config/llms.json`)
+## UI
 
-```json
-{
-  "active": "anthropic-sonnet",
-  "profiles": [
-    {"id": "anthropic-sonnet", "provider": "anthropic", "model": "claude-sonnet-4-5", "api_key_env": "ANTHROPIC_API_KEY"},
-    {"id": "openai-gpt4o-mini", "provider": "openai", "model": "gpt-4o-mini", "api_key_env": "OPENAI_API_KEY"},
-    {"id": "my-gateway", "provider": "openai_compatible", "model": "my-model",
-     "base_url": "https://gateway.example.com/v1", "api_key_env": "LLM_API_KEY"}
-  ]
-}
+Static files in `ui/`. Deployed by `.github/workflows/pages.yml` on push to `ui/**`.
+
+## Worker
+
+Cloudflare Worker in `worker/` (webhook + WebSocket hub). Deployed by `deploy-worker.yml`.
+
+## Free API host (Render)
+
+`render.yaml` builds/runs from **`backend/`**:
+
 ```
-
-- Override active profile: env `LLM_PROFILE=openai-gpt4o-mini`
-- Optional `price_in` / `price_out` (USD per 1M tokens) for cost in traces
-- `rag.ask(..., llm_profile="my-gateway")` or API body `{ "llm_profile": "..." }`
-
-Providers: `anthropic` | `openai` | `openai_compatible` (any OpenAI-compatible chat API).
-
-## API endpoints
-
-| Method | Path | Purpose |
-|--------|------|--------|
-| GET | `/health` | Liveness |
-| GET | `/status` | Chunks, embedding + **LLM** profiles |
-| POST | `/ask` | Answer (`question`, `backend`, `k`, optional `llm_profile`) |
-| GET | `/retrieve` | Top-k chunks |
-| POST | `/ingest` | Upload PDF |
-| GET | `/traces` | Recent traces |
-| GET | `/llms` | LLM profiles JSON |
-| GET | `/embeddings` | Embedding profiles JSON |
-| POST | `/evals` | Offline eval set |
-
-## UI → Live API
-
-1. Deploy API (e.g. Render + `render.yaml`).
-2. Open Pages UI or `ui/index.html`.
-3. **Connect** → set API base URL → Save.
-4. **Live API** → status / ask (pick LLM profile) / ingest / traces.
-5. **LLMs** → list profiles from `/llms`.
-
-## Free hosting
-
-Build: `pip install -r requirements.txt`  
-Start: `uvicorn api:app --host 0.0.0.0 --port $PORT`  
-Secrets: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, optional `LLM_API_KEY` / `GROQ_API_KEY`
+pip install -r requirements.txt
+uvicorn api:app --host 0.0.0.0 --port $PORT
+```

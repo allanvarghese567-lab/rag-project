@@ -1,16 +1,16 @@
-# Optional: one-click deploy on Render.com free tier
+# Deploy API from backend/
 # https://render.com/docs/blueprint-spec
 services:
   - type: web
     name: rag-api
     runtime: python
     plan: free
+    rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
         value: "3.11"
-      # Active LLM: groq-llama
       - key: GROQ_API_KEY
         sync: false
       - key: GITHUB_TOKEN
