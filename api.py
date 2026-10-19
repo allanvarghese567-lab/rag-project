@@ -25,11 +25,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-import config
-import rag
-import retrieval
-import store
-from ingest import ingest
+from ragcore import config, rag, retrieval, store
+from ragcore.ingest import ingest
 
 CONSOLE_HTML = """<!doctype html>
 <html lang=\"en\">
@@ -128,7 +125,7 @@ app = FastAPI(
         "Open **/console** for one-click buttons. "
         "Use as a custom connector in automation tools via OpenAPI."
     ),
-    version="1.2.2",
+    version="1.3.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -415,7 +412,7 @@ def traces(limit: int = Query(20, ge=1, le=200)):
 
 @app.post("/evals", tags=["evals"])
 def run_evals(body: EvalRequest):
-    import evals
+    from ragcore import evals
 
     try:
         evals.run(body.label, backend=body.backend, k=body.k)
